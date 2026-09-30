@@ -1,6 +1,7 @@
 """창업자 검증 Agent: 웹 검색만 사용, 창업자·팀 역량 25점 담당."""
 import json
 import logging
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
@@ -8,6 +9,7 @@ from itertools import islice
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 # agents/ 안에서 python founder_insight.py로 실행한 경우에도 패키지 경로를 설정한다.
@@ -24,6 +26,14 @@ from pydantic import Field, field_validator
 from prompts import founder_insight_prompt
 
 from .evaluation_support import AgentResult, ContractModel, CriterionEvaluation, Evidence
+
+# Graph 호출 시 모델을 별도로 주입하지 않으면 이 설정으로 생성한다.
+MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o-mini")
+MODEL_TEMPERATURE = 0
+TAVILY_API_URL = "https://api.tavily.com/search"
+TAVILY_MAX_RESULTS = 5
+FOUNDER_CRITERION = "창업자·팀 역량"
+FOUNDER_MAX_SCORE = 25.0
 
 # common.py가 없는 팀 저장소에서도 공개 Agent를 독립적으로 import할 수 있다.
 Search = Callable[[str], Sequence[Any]]
@@ -210,6 +220,57 @@ def create_founder_agent(model: Any, web_search: FounderSearch, *,
 
 # 팀 저장소에서는 두 팩토리 이름 모두 공통 AgentResult를 반환하는 Agent를 만든다.
 create_founder_insight = create_founder_agent
+
+
+def _default_web_search(query: str) -> list[Evidence]:
+    """Graph가 검색기를 주입하지 않을 때 Tavily 웹 검색 결과를 공통 근거로 변환한다."""
+    api_key = os.environ["TAVILY_API_KEY"]
+    payload = json.dumps({"api_key": api_key, "query": query,
+                          "max_results": TAVILY_MAX_RESULTS}).encode("utf-8")
+    request = Request(TAVILY_API_URL, data=payload,
+                      headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=30) as response:
+        results = json.load(response)["results"]
+    return [Evidence(evidence_id=f"web-{item['url']}", claim=item["content"],
+                     source_title=item.get("title") or item["url"],
+                     source_url=item["url"], page=None) for item in results]
+
+
+def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Graph의 호출·결과 계약과 기존 FounderInsightAgent 사이의 어댑터."""
+    company_name = state["company_context"]["company_name"]
+    round_no = state["retry_state"]["retry_count"] + 1
+    request = FounderAgentInput.model_validate({
+        "company_name": company_name,
+        "founder_names": state.get("founder_names", []),
+        "evaluation_request": state["evaluation_request"],
+    })
+    model = kwargs.get("model")
+    if model is None:
+        from langchain_openai import ChatOpenAI
+        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
+    web_search = kwargs.get("web_search", _default_web_search)
+    result = create_founder_agent(model, web_search).invoke(request, config=kwargs.get("config"))
+    evidence = [{"evidence_id": item.evidence_id, "claim": item.claim,
+                 "excerpt": item.claim, "source_type": "web", "source": item.source_url}
+                for item in result.evidence]
+    missing = list(dict.fromkeys([*result.missing_information, *result.risks]))
+    evaluation = result.evaluations[0]
+    summary = evaluation.reason
+    scores = []
+    if evaluation.score is not None and evaluation.evidence_ids:
+        criteria = kwargs.get("criteria", [(FOUNDER_CRITERION, FOUNDER_MAX_SCORE)])
+        criterion, maximum = criteria[0]
+        scores.append({"criterion": criterion, "score": evaluation.score / 100 * maximum,
+                       "max_score": maximum, "reason": evaluation.reason,
+                       "evidence_ids": evaluation.evidence_ids})
+    output = {"company_name": company_name, "round_no": round_no,
+              "agent": "founder_insight", "status": "partial" if missing or not scores else "success",
+              "summary": summary, "evidence": evidence, "missing_items": missing,
+              "scores": scores}
+    if scores:
+        output["score"] = scores[0]["score"]
+    return output
 
 
 if __name__ == "__main__":

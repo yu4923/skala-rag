@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
@@ -36,6 +37,8 @@ from .evaluation_support import (
 
 logger = logging.getLogger(__name__)
 MARKET_CRITERIA = dict(CRITERIA["market"])
+MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o-mini")
+MODEL_TEMPERATURE = 0
 
 
 class MarketSource(ContractModel):
@@ -359,6 +362,60 @@ class MarketScoutAgent:
 def create_market_scout(model: Any, web_search: MarketSearch, rag_search: MarketSearch,
                         **kwargs) -> MarketScoutAgent:
     return MarketScoutAgent(model, web_search, rag_search, **kwargs)
+
+
+def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Graph State를 기존 시장성 Agent의 입력 및 Graph 결과 계약으로 변환한다."""
+    context = state["company_context"]
+    round_no = state["retry_state"]["retry_count"] + 1
+    criteria = kwargs.get("criteria", list(MARKET_CRITERIA.items()))
+    if dict(criteria) != MARKET_CRITERIA:
+        raise ValueError("시장성 평가 항목과 배점이 Agent 계약과 다릅니다.")
+    agent_input = {
+        **state.get("market_input", {}),
+        "company_name": context["company_name"],
+        "evaluation_request": state["evaluation_request"],
+        "round_no": round_no,
+    }
+    request = MarketAgentInput.model_validate(agent_input)
+    model = kwargs.get("model")
+    if model is None:
+        from langchain_openai import ChatOpenAI
+        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
+    empty_search = lambda query: []
+    agent = create_market_scout(
+        model, kwargs.get("web_search") or empty_search,
+        kwargs.get("rag_search") or empty_search,
+    )
+    result = agent.run(request, config=kwargs.get("config"))
+    assessment = result.assessment
+    evidence = [
+        {"evidence_id": item.evidence_id, "claim": item.claim,
+         "excerpt": item.excerpt, "source_type": item.source_type,
+         "source": item.source, **({"page": item.page} if item.page is not None else {})}
+        for item in assessment.evidence
+    ] if assessment is not None else []
+    used_ids = {item.evidence_id for item in result.result.evidence}
+    evidence = [item for item in evidence if item["evidence_id"] in used_ids]
+    scores = [
+        {"criterion": item.criterion, "score": item.score,
+         "max_score": MARKET_CRITERIA[item.criterion], "reason": item.reason,
+         "evidence_ids": item.evidence_ids}
+        for item in result.result.evaluations if item.score is not None
+    ]
+    missing = result.result.missing_information
+    status = "success" if assessment is not None and assessment.status == "success" and not missing else "partial"
+    if assessment is None and not scores:
+        status = "error"
+    output = {
+        "company_name": request.company_name, "round_no": request.round_no,
+        "agent": "market_scout", "status": status,
+        "summary": assessment.summary if assessment is not None else "시장성 평가에 필요한 근거가 부족합니다.",
+        "evidence": evidence, "missing_items": missing, "scores": scores,
+    }
+    if len(scores) == len(MARKET_CRITERIA):
+        output["score"] = sum(item["score"] for item in scores)
+    return output
 
 
 if __name__ == "__main__":
