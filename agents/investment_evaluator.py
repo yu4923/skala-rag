@@ -1,16 +1,19 @@
 """외부 검색/LLM 없이 전문 평가를 통합하는 종합 투자 판단 Agent."""
 
+from prompts.investment_evaluator_prompt import INVESTMENT_EVALUATOR_PROMPT as INVESTMENT_SYSTEM_PROMPT
+
 from .evaluation_support import (
     CRITERIA, InvestmentAgentInput, InvestmentResult, calculate_total,
     collect_evidence, mapping, unique,
 )
 
-# TODO(프롬프트 연동): 종합 투자 판단 프롬프트 파일이 추가되면
-# 이 파일에서 해당 상수를 import해 INVESTMENT_SYSTEM_PROMPT로 연결한다.
-# 현재 prompts/에는 종합 투자 판단 프롬프트가 없다. 필요한 입력·출력 및
-# 판단 규칙은 tests/README.md의 '프롬프트 검토 및 요청 사항'에 정리했다.
+# 프롬프트 수정 위치: prompts/investment_evaluator_prompt.py의 INVESTMENT_EVALUATOR_PROMPT.
+# 위 import로 직접 불러오므로 Agent 코드에 본문을 복사하지 않는다.
 # 현재 이 상수는 사용하지 않는다. LLM/API 확정 후 호출부를 별도로 연결해야 한다.
-INVESTMENT_SYSTEM_PROMPT: str | None = None
+# TODO(입출력 연동): 프롬프트가 요구하는 criteria_met, evidence_review, 판단 설정값을
+# Graph에서 전달받는 계약을 확정한다. 현재 InvestmentAgentInput에는 이 필드가 없다.
+# 프롬프트의 반환값은 판단 근거 문자열이다. InvestmentResult 전체를 대체하지 않고,
+# 향후 설명 필드에 연결하되 코드에서 계산한 점수와 판단을 유지해야 한다.
 
 
 class InvestmentEvaluator:

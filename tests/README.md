@@ -45,7 +45,7 @@ report_data = report.model_dump()
 
 ## 현재 한계와 팀 연동 항목
 
-현재는 결정적 통합 로직과 템플릿 보고서이며 LLM 호출은 연결하지 않았다. `REPORT_SYSTEM_PROMPT`는 `prompts/report_generator_prompt.py`의 `REPORT_GENERATOR_PROMPT`를 import한 별칭이다. 프롬프트 본문은 해당 원본 파일에서만 관리한다. 변경 사항은 다음 프로세스 실행 시 반영되며 실행 중인 프로세스는 재시작해야 한다. `INVESTMENT_SYSTEM_PROMPT`는 대응 프롬프트 파일이 없어 `None`이며, 파일이 추가되면 import로 연결한다. 두 상수는 아직 LLM 호출에 사용되지 않는다. 모델/API 및 아래 출력 계약 합의 후 호출을 연결해야 한다. Graph, State, Branch, Loop, RAG, 창업자 Agent는 구현 범위에 포함하지 않았다.
+현재는 결정적 통합 로직과 템플릿 보고서이며 LLM 호출은 연결하지 않았다. `REPORT_SYSTEM_PROMPT`는 `prompts/report_generator_prompt.py`의 `REPORT_GENERATOR_PROMPT`, `INVESTMENT_SYSTEM_PROMPT`는 `prompts/investment_evaluator_prompt.py`의 `INVESTMENT_EVALUATOR_PROMPT`를 import한 별칭이다. 프롬프트 본문은 해당 원본 파일에서만 관리한다. 변경 사항은 다음 프로세스 실행 시 반영되며 실행 중인 프로세스는 재시작해야 한다. 두 상수는 아직 LLM 호출에 사용되지 않는다. 모델/API 및 아래 출력 계약 합의 후 호출을 연결해야 한다. Graph, State, Branch, Loop, RAG, 창업자 Agent는 구현 범위에 포함하지 않았다.
 
 근거 ID와 연결 여부는 검증하지만, 주장·출처의 의미적 관련성, 사실성, 자료 간 모순을 검증하지는 않는다. `pending`은 근거 충분성 또는 투자 적합성을 인증하는 결과가 아니다. 이 검토 기준과 최종 판단 기준은 팀 합의가 필요하다. `confidence`는 형식만 검증하고 임의 임계값으로 판단에 사용하지 않는다.
 
@@ -55,7 +55,7 @@ report_data = report.model_dump()
 
 | 받은 자료 | 수정 파일 및 위치 |
 |---|---|
-| 최종 종합 투자 판단 프롬프트 | `prompts/`에 파일 추가 후 `agents/investment_evaluator.py`에서 import 연결. LLM 호출은 `InvestmentEvaluator.invoke()`에 연결 |
+| 종합 투자 판단 프롬프트 본문 변경 | `prompts/investment_evaluator_prompt.py`의 `INVESTMENT_EVALUATOR_PROMPT`만 수정. LLM 호출은 `agents/investment_evaluator.py`의 `InvestmentEvaluator.invoke()`에 연결 |
 | 보고서 프롬프트 본문 변경 | `prompts/report_generator_prompt.py`의 `REPORT_GENERATOR_PROMPT`만 수정. LLM 호출은 `agents/report_generator.py`의 `ReportGenerator.invoke()`에 연결 |
 | `agents/founder_insight.py`, `agents/market_scout.py`, `agents/tech_brief.py`의 실제 출력 및 공통 모델 | `agents/evaluation_support.py`의 `validate_specialist()`, `InvestmentAgentInput` (공통 모델 정의 경로는 미정) |
 | RAG 결과의 사업 개요 필드 및 근거 ID | `agents/evaluation_support.py`의 입력 모델, `agents/report_generator.py`의 `business_overview` |
@@ -65,9 +65,9 @@ report_data = report.model_dump()
 
 ## 프롬프트 검토 및 요청 사항
 
-현재 `prompts/`의 4개 파일을 기준으로 확인했다. 다른 Agent의 프롬프트 원본은 수정하지 않았다.
+아래 2~6번은 이전 프롬프트 4개를 기준으로 작성한 검토 기록이다. 최신 프롬프트를 가져왔으므로 다음 입출력 연동 작업에서 해결 여부를 다시 확인해야 한다. 1번은 새 종합 투자 판단 프롬프트를 기준으로 갱신했다. 다른 Agent의 프롬프트 원본을 임의로 수정하지 않았다.
 
-1. **종합 투자 판단 프롬프트 추가 요청**: 대응 파일이 없다. 세 전문 결과와 코드가 계산한 총점을 입력으로 받고 `InvestmentResult`의 `company_name`, `total_score`, `decision`, `key_reasons`, `risks`, `missing_information`, `needs_more_information`을 반환하는 규칙이 필요하다. 합계 재계산·새 자료 생성 금지, 근거 부족 시 처리, 기준 미확정 시 `pending`/`additional_research` 제한을 명시해야 한다. 통과·보류 기준은 별도 팀 합의 사항이다.
+1. **종합 투자 판단 프롬프트 import 완료, 실행 계약 연결 필요**: `prompts/investment_evaluator_prompt.py`를 Agent에서 직접 import한다. 이 프롬프트는 계산된 `total_score`, `criteria_met`, `evidence_review`, 판단 설정값 등을 받아 판단 근거 문자열을 반환한다. 현재 `InvestmentAgentInput`에는 `criteria_met`, `evidence_review`, 판단 설정값 필드가 없으므로 Graph와 전달 계약을 확정해야 한다. 문자열 결과는 향후 설명 필드에 연결하며 `InvestmentResult` 전체를 대체하지 않는다. LLM/API 연결 전까지 기존 결정적 로직과 `pending`/`additional_research` 동작을 유지한다.
 2. **전문 Agent 출력 스키마 통일 요청**: `founder_insight_prompt.py`, `market_scout_prompt.py`, `tech_brief_prompt.py`는 단일 `score`, `conclusion`, `missing_items`, 근거의 `source`/`url`을 반환한다. 현재 입력은 `agent_name`, `company_name`, `evaluations`(항목·점수·이유·`evidence_ids`), `evidence`(`evidence_id`, `claim`, `source_title`, `source_url`, `page`), `risks`, `missing_information`, `confidence`, `needs_more_information`이 필요하다. 어느 계약을 사용할지 공통 모델과 함께 확정해야 한다. 단일 점수를 여러 항목으로 임의 분배할 수 없으므로 전문 프롬프트에 항목별 배점(25 / 25+25 / 15+10)과 미확인 점수 `null` 규칙을 요청한다.
 3. **보고서 목차·출력 형식 확정 요청**: `report_generator_prompt.py`는 Markdown으로 '주요 위험과 한계'와 '종합 평가'를 분리한다. 기존 `ReportResult`는 `summary`, `business_overview`, `market_analysis`, `product_technology_and_team`, `investment_review`, `references`이며 위험은 `investment_review`에 포함한다. 기존 구조화 출력을 유지할지, 별도 위험 필드를 추가하고 Markdown으로 변환할지 확정이 필요하다. 최종 판단뿐 아니라 총점·항목 점수도 변경하지 않는 규칙을 명시해 달라고 요청한다.
 4. **출처 연결 규칙 요청**: 본문 인용에 입력 `evidence_id`를 사용하고 존재하지 않는 ID를 만들지 않는 규칙, 실제 인용한 ID만 반환하는 규칙이 필요하다. 전체 입력 근거는 후보 자료이며 사용 출처는 본문 생성 후 결정된다. 현재 보고서 프롬프트의 '실제 사용된 출처 목록'이 전문 Agent의 사용 출처인지 최종 보고서의 사용 출처인지 구분해야 한다.
