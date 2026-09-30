@@ -1,0 +1,18 @@
+# Full application dependencies (Python 3.10+)
+# Graph, agents, OpenAI models, and LangSmith tracing
+langchain>=1.0,<2
+langchain-core>=1.0,<2
+langgraph>=1.0,<2
+langchain-openai>=1.0,<2
+langchain-teddynote>=0.5.4,<0.6
+pydantic>=2.7,<3
+python-dotenv>=1.0,<2
+typing-extensions>=4.12
+
+# Product/technology PDF RAG and local E5 embeddings
+langchain-community>=0.4,<0.5
+langchain-text-splitters>=1.0,<2
+pymupdf>=1.26,<2
+sentence-transformers>=3,<6
+torch>=2,<3
+faiss-cpu>=1.8,<2
