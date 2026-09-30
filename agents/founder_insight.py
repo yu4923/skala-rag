@@ -1,12 +1,19 @@
 """창업자 검증 Agent: 웹 검색만 사용, 창업자·팀 역량 25점 담당."""
 import json
 import logging
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from itertools import islice
+from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib.parse import urlsplit
+
+# agents/ 안에서 python founder_insight.py로 실행한 경우에도 패키지 경로를 설정한다.
+if __name__ == "__main__" and not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "agents"
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
@@ -16,17 +23,10 @@ from pydantic import Field, field_validator
 
 from prompts import founder_insight_prompt
 
-from .common import Search, create_research_node
 from .evaluation_support import AgentResult, ContractModel, CriterionEvaluation, Evidence
 
-
-def create_founder_insight(model: Any, web_search: Search, *, system_prompt: str | None = None, **kwargs):
-    """기존 그래프 호환용. 새 공개 계약은 create_founder_agent를 사용한다."""
-    # 기존 그래프의 ResearchOutput과 충돌하는 새 JSON 예시만 제외한다.
-    prompt = (founder_insight_prompt.FOUNDER_INSIGHT_PROMPT.split("반환 형식:", 1)[0]
-              if system_prompt is None else system_prompt)
-    return create_research_node(role="founder", model=model, web_search=web_search,
-                                prompt=prompt.strip(), **kwargs)
+# common.py가 없는 팀 저장소에서도 공개 Agent를 독립적으로 import할 수 있다.
+Search = Callable[[str], Sequence[Any]]
 
 
 class FounderAgentInput(ContractModel):
@@ -206,3 +206,13 @@ def create_founder_agent(model: Any, web_search: FounderSearch, *,
                          system_prompt: str | None = None, **kwargs) -> FounderInsightAgent:
     """prompts 파일의 기본 프롬프트 또는 전달받은 system_prompt를 적용한다."""
     return FounderInsightAgent(model, web_search, system_prompt=system_prompt, **kwargs)
+
+
+# 팀 저장소에서는 두 팩토리 이름 모두 공통 AgentResult를 반환하는 Agent를 만든다.
+create_founder_insight = create_founder_agent
+
+
+if __name__ == "__main__":
+    print("창업자 Agent 모듈을 정상적으로 불러왔습니다.\n"
+          "기업 평가는 create_founder_agent(model, web_search).invoke(입력값)으로 실행하세요.\n"
+          "이 파일을 단독 실행하는 것만으로 검색이나 LLM 호출은 시작되지 않습니다.")

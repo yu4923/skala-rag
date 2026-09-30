@@ -214,3 +214,56 @@ class ReportResult(Serializable):
         for key in ("summary", "business_overview", "market_analysis", "product_technology_and_team", "investment_review"):
             nonempty(getattr(self, key), key)
         require(isinstance(self.references, list), "references: 목록이 필요합니다")
+
+
+# 전문 Agent 공통 결과 계약
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class ContractModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+
+class Evidence(ContractModel):
+    """claim은 출처에서 확인한 근거 문장. 검색 어댑터는 원문 발췌를 넣는다."""
+
+    evidence_id: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    source_title: str = Field(min_length=1)
+    source_url: str | None = None
+    page: int | None = Field(default=None, ge=1)
+
+
+class CriterionEvaluation(ContractModel):
+    criterion: str = Field(min_length=1)
+    score: float | None = Field(default=None, ge=0, le=100)
+    reason: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class AgentResult(ContractModel):
+    agent_name: Literal["founder", "market", "technology"]
+    company_name: str = Field(min_length=1)
+    evaluations: list[CriterionEvaluation]
+    evidence: list[Evidence]
+    risks: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"]
+    needs_more_information: bool
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        ids = [item.evidence_id for item in self.evidence]
+        if len(ids) != len(set(ids)):
+            raise ValueError("evidence_id는 결과 내에서 중복될 수 없습니다.")
+        criteria = [item.criterion for item in self.evaluations]
+        if len(criteria) != len(set(criteria)):
+            raise ValueError("평가 항목은 결과 내에서 중복될 수 없습니다.")
+        for evaluation in self.evaluations:
+            if set(evaluation.evidence_ids) - set(ids):
+                raise ValueError("evidence_ids는 결과에 포함된 근거만 참조해야 합니다.")
+            if evaluation.score is not None and not evaluation.evidence_ids:
+                raise ValueError("근거가 없는 항목의 score는 None이어야 합니다.")
+        return self
