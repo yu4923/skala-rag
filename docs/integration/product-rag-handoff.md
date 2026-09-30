@@ -16,7 +16,7 @@ documents = retriever.search(
 )
 ```
 
-담당자의 완성된 Agent 프로젝트에서 다음과 같이 주입한다. 아래 `model`은 Agent 담당자가 준비한 `invoke` 지원 모델이다. 현재 RAG 저장소의 `agents/tech_brief.py`는 원래의 빈 파일로 유지되어 이 Agent 생성 예제는 담당자 프로젝트에서 실행해야 한다.
+현재 `agents/tech_brief.py`에는 Agent와 LangGraph용 `run(state)`가 연결되어 있다. 아래 `model`은 `invoke`를 지원하는 모델이다. 명시적으로 검색기를 주입하는 기존 방식도 유지한다.
 
 ```python
 from agents.tech_brief import ProductTechAgent
@@ -24,6 +24,25 @@ from rag.product_tech_retriever import ProductTechRAGRetriever
 
 agent = ProductTechAgent(model=model, retriever=ProductTechRAGRetriever(top_k=3))
 ```
+
+검색기를 생략하면 기본 `ProductTechRAGRetriever`를 사용한다. 선택 우선순위는 호출 인자 `retriever` → `agents/tech_brief.py`의 `RETRIEVER` → 기본 RAG다. 기본 검색기의 질의별 청크 수는 같은 파일 상단의 `RETRIEVER_TOP_K`에서 변경한다. RAG 패키지는 기본 검색기를 처음 사용할 때 불러오므로 Mock 검색기만 사용하는 테스트에는 필요하지 않다.
+
+```python
+from agents.tech_brief import run
+
+result = run({
+    "company_context": {"company_name": "해줌"},
+    "evaluation_request": "제품 기능, 작동 원리와 성능 검증 조건을 평가한다",
+    "retry_state": {"retry_count": 0},
+})
+# result는 Graph가 tech_result에 저장할 전문 평가 dict다.
+```
+
+실행 전 `requirements-agent.txt`와 `requirements-tech.lock.txt`의 의존성을 준비하고 `python -m rag.tech_ingest`로 로컬 인덱스를 생성한다. RAG 전달 환경은 Python 3.11이다. 기존 `.venv`나 인덱스를 덮어쓰지 않는다. RAG 검색 자체에는 OpenAI 키가 필요 없지만, 위 `run()`의 기본 요약 모델에는 `.env`의 `OPENAI_API_KEY`와 `LLM_MODEL`(또는 `OPENAI_MODEL`)이 필요하다. 모델을 직접 주입할 수도 있다.
+
+기본 검색기는 프로세스 안에서 재사용한다. 인덱스를 재생성한 뒤에는 프로세스를 재시작하거나 `agents.tech_brief.default_retriever.cache_clear()`를 호출한다. 외부에서 주입한 검색기는 직접 다시 생성한다. 초기화·import·검색 오류는 원인 예외를 보존한 `ProductTechRetrievalError`로 전달하며, 빈 검색 결과로 숨기지 않는다.
+
+Agent 연결 테스트 24개는 `agent` 브랜치의 커밋 `6cafb0a`에서 통과했다. 전달된 검색 결과 샘플과 Mock을 사용한 검사이며 실제 LLM의 의미적 정확성을 검증하지 않는다. `main`에서는 기존 테스트 폴더 삭제 결정을 유지하므로 이 테스트 파일을 복원하지 않았다.
 
 반환 필드 매핑:
 
@@ -51,7 +70,7 @@ agent = ProductTechAgent(model=model, retriever=ProductTechRAGRetriever(top_k=3)
 
 전달 대상은 `rag/` 코드, 원본 PDF, `tech_data/vector_index_product/`, 의존성 파일과 이 매뉴얼이다. DB 폴더만 전달하면 임베딩·회사 라우팅·필드 매핑이 빠져 바로 연결할 수 없다. 전달용 ZIP에는 키·.env·.venv·모델 캐시를 포함하지 않는다.
 
-검증 범위: 담당자 첨부 코드의 RetrievedDocument, adapt_retrieval_result, prepare_documents를 분리해 실제 검색 결과로 검사했다. 첨부 파일 끝이 잘렸고 evaluation_support/프롬프트 의존성이 없어 Agent 전체 실행은 검증하지 못했다. 이 분리 검사에서는 외부 ContractModel 대신 extra=forbid인 Pydantic BaseModel을 사용했다. 완성본의 추가 검증 규칙이 있다면 최종 통합 검증이 필요하다.
+RAG 전달 당시 검증 범위: 담당자 첨부 코드의 RetrievedDocument, adapt_retrieval_result, prepare_documents를 분리해 실제 검색 결과로 검사했다. 당시에는 첨부 파일 끝과 evaluation_support/프롬프트 의존성이 없어 Agent 전체 실행은 검증하지 못했다. 현재 Agent 연결 테스트 이력은 위에 명시했다. 실제 인덱스 검색과 실제 LLM을 함께 사용하는 종단 간 검증은 별도로 필요하다.
 
 실제 반환 샘플: `docs/examples/product-tech-agent-result.json`.
 
