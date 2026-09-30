@@ -42,11 +42,11 @@ AGENT_RESULT_FIELDS = {
     "tech_brief": "tech_result",
 }
 AGENT_MODULES = {
-    "founder_insight": "agents.founder_insight_agents",
-    "market_scout": "agents.market_scout_agents",
-    "tech_brief": "agents.tech_brief_agents",
-    "investment_evaluator": "agents.investment_evaluator_agents",
-    "report_generator": "agents.report_generator_agents",
+    "founder_insight": "agents.founder_insight",
+    "market_scout": "agents.market_scout",
+    "tech_brief": "agents.tech_brief",
+    "investment_evaluator": "agents.investment_evaluator",
+    "report_generator": "agents.report_generator",
 }
 
 # ──────────────────────────────────────
