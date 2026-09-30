@@ -1,0 +1,4 @@
+# Python 3.10+ required.
+# InvestmentEvaluator, ReportGenerator, demo_agents.py and their tests
+# use only the Python standard library. No pip packages or API keys required.
+# This is not a dependency list for the future full Graph/RAG/LLM application.

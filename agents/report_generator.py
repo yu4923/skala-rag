@@ -1,15 +1,16 @@
 """검증된 입력을 그대로 인용하는 구조화 보고서. 최종 LLM 문체 생성은 미연결."""
 
+from prompts.report_generator_prompt import REPORT_GENERATOR_PROMPT as REPORT_SYSTEM_PROMPT
+
 from .evaluation_support import (
     ReportAgentInput, ReportResult, collect_evidence, mapping,
 )
 
-# TODO(프롬프트 연동): prompts/report_generator_prompt.py의 최종 내용 확정 후
-# agents/report_generator.py의 REPORT_SYSTEM_PROMPT에 반영한다.
+# 프롬프트 수정 위치: prompts/report_generator_prompt.py의 REPORT_GENERATOR_PROMPT.
+# 위 import로 직접 불러오므로 Agent 코드에 본문을 복사하지 않는다.
 # 현재 이 상수는 사용하지 않는다. LLM/API 확정 후 호출부를 별도로 연결해야 한다.
-REPORT_SYSTEM_PROMPT = """
-TODO: 최종 보고서 작성 프롬프트를 여기에 붙여넣는다.
-"""
+# TODO(출력 계약): 원본은 Markdown 5개 장, ReportResult는 본문 4개 필드다.
+# tests/README.md의 '프롬프트 검토 및 요청 사항'을 확정한 뒤 호출부를 연결한다.
 
 
 class ReportGenerator:
@@ -20,7 +21,7 @@ class ReportGenerator:
         evidence, aliases = collect_evidence(data.results)
         used = set()
 
-        # TODO(프롬프트/LLM 연동): 최종 프롬프트 수령 후 이 파일의
+        # TODO(프롬프트/LLM 연동): 위 프롬프트의 출력 계약 확정 후 이 파일의
         # ReportGenerator.invoke() 내부 section() 및 ReportResult 생성 부분에
         # 검증된 입력만 사용하는 LLM 호출을 연결한다. 기존 점수·판단은 그대로 유지하고,
         # 생성 본문의 실제 인용 ID를 검증해 used와 references를 구성해야 한다.
