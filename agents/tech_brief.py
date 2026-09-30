@@ -1,7 +1,8 @@
-"""제품·기술 검색 경계와 근거 검증. 실제 Retriever/Graph 구현은 호출자가 주입한다."""
+"""제품·기술 RAG 연결과 근거 검증. 모델과 Retriever의 외부 주입도 지원한다."""
 
 from collections.abc import Callable, Mapping
 from decimal import Decimal
+from functools import lru_cache
 import json
 from typing import Any, Literal, Protocol
 from urllib.parse import quote, urlsplit
@@ -22,15 +23,37 @@ MODEL = None
 MODEL_FACTORY = create_model_from_env
 MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 모델명은 .env의 LLM_MODEL에서 읽는다.
 RETRIEVER = None
+RETRIEVER_TOP_K = 3  # 질의별 최대 청크 수. rag/product_tech_retriever.py에 전달한다.
 
 # 프롬프트 수정 위치: prompts/tech_brief_prompt.py의 TECH_BRIEF_PROMPT.
 # 앞서 합의한 파일 import 방식을 유지한다. 최종 본문을 이 파일에 중복 복사하지 않는다.
-# 실제 RAG 형식 수령 후 아래 adapt_retrieval_result() 또는 주입하는 adapter만 수정한다.
+# RAG 연결 위치: rag/product_tech_retriever.py. 반환 형식은 RetrievedDocument와 동일하다.
 TECH_CRITERIA = dict(CRITERIA["technology"])
 
 
 class ProductTechRetrievalError(RuntimeError):
     """검색 시스템/어댑터 오류. 빈 검색 결과와 구분하여 Graph에 전달한다."""
+
+
+@lru_cache(maxsize=1)
+def default_retriever(top_k):
+    """RAG 의존성은 실제 사용 시 로딩한다. 인덱스 재생성 후 cache_clear() 필요."""
+    from rag.product_tech_retriever import ProductTechRAGRetriever
+
+    return ProductTechRAGRetriever(top_k=top_k)
+
+
+def resolve_retriever(retriever=None):
+    """호출 인자 → 모듈 설정 → 기본 RAG 순서로 선택한다."""
+    try:
+        selected = retriever if retriever is not None else RETRIEVER
+        if selected is None:
+            selected = default_retriever(RETRIEVER_TOP_K)
+        if not callable(getattr(selected, "search", None)):
+            raise ValueError("search() Retriever가 필요합니다")
+        return selected
+    except Exception as exc:
+        raise ProductTechRetrievalError("제품·기술 RAG 초기화 실패: 의존성과 검색기 설정을 확인하세요") from exc
 
 
 class ProductTechEvidenceError(AgentGenerationError):
@@ -79,7 +102,7 @@ class ProductTechRetriever(Protocol):
 
 
 def adapt_retrieval_result(raw_result) -> list[RetrievedDocument]:
-    """현재는 내부 모델/동일 필드 dict만 지원. 실제 RAG 필드 매핑을 추측하지 않는다."""
+    """ProductTechRAGRetriever의 dict 또는 동일 계약의 내부 모델을 검증한다."""
     if not isinstance(raw_result, (list, tuple)):
         raise ValueError("검색 결과는 문서 목록이어야 합니다")
     return [RetrievedDocument.model_validate(
@@ -258,13 +281,13 @@ def validate_assessment(assessment, request, registry, missing):
 
 
 class ProductTechAgent:
-    def __init__(self, model, retriever: ProductTechRetriever, *,
+    def __init__(self, model, retriever: ProductTechRetriever | None = None, *,
                  adapter: Callable = adapt_retrieval_result):
         if not callable(getattr(model, "invoke", None)):
             raise ValueError("invoke(messages)를 지원하는 모델이 필요합니다")
-        if not callable(getattr(retriever, "search", None)) or not callable(adapter):
-            raise ValueError("search() Retriever와 adapter가 필요합니다")
-        self.model, self.retriever, self.adapter = model, retriever, adapter
+        if not callable(adapter):
+            raise ValueError("호출 가능한 adapter가 필요합니다")
+        self.model, self.retriever, self.adapter = model, resolve_retriever(retriever), adapter
 
     def invoke(self, agent_input: ProductTechAgentInput | Mapping) -> AgentResult:
         request = ProductTechAgentInput.model_validate(
@@ -307,6 +330,9 @@ class ProductTechAgent:
             "기업 주장, independent이면 외부 자료로 구분하고 미제공이면 출처 성격 미확인으로 표시한다. "
             "단위·기준 시점·시험 환경을 확인할 수 없으면 missing_items에 기록한다. "
             "동일 원천 재인용을 독립 검증으로 간주하거나 서로 다른 시험 조건을 직접 비교하지 않는다. "
+            "공개 자료를 편집한 기술 자료집의 [기술 해석]·[분석]은 작성자의 해석이며 "
+            "기업이 검증한 사실이나 실제 구현으로 단정하지 않는다. 검색 순위나 반환 개수만으로 "
+            "관련성·근거 충분성을 인정하지 말고 질문에 직접 답하는 근거가 없으면 score를 null로 둔다. "
             "제품·기술 위험은 summary와 해당 항목 reason에 정리하고 risks 목록에도 전달한다. "
             "출력 스키마: " + json.dumps(TechAssessment.model_json_schema(), ensure_ascii=False)
         )
@@ -318,7 +344,7 @@ class ProductTechAgent:
             raise ProductTechEvidenceError("제품·기술 생성 결과 또는 근거 검증 실패") from exc
 
 
-def create_product_tech_agent(model, retriever, *, adapter=adapt_retrieval_result):
+def create_product_tech_agent(model, retriever=None, *, adapter=adapt_retrieval_result):
     """Graph 공개 생성 함수. 반환 객체는 invoke(ProductTechAgentInput) -> AgentResult."""
     return ProductTechAgent(model, retriever, adapter=adapter)
 
@@ -341,7 +367,7 @@ def run(state, *, model=None, retriever=None, adapter=None, criteria=None, **kwa
 
     agent = create_product_tech_agent(
         resolve_model(model, MODEL, MODEL_FACTORY, MODEL_SETTINGS),
-        retriever if retriever is not None else RETRIEVER, adapter=capture_sources,
+        retriever, adapter=capture_sources,
     )
     result = agent.invoke(ProductTechAgentInput(
         company_name=company, evaluation_request=state["evaluation_request"],
