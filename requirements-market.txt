@@ -1,0 +1,5 @@
+# Market Scout / Founder runtime. PDF indexing and the chosen search provider are separate.
+langchain>=1.0,<2
+pydantic>=2.7,<3
+# Only needed when the caller uses ChatOpenAI in the usage example.
+langchain-openai>=1.0,<2
