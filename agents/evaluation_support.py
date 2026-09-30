@@ -6,6 +6,38 @@ from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from math import isfinite
 from typing import Any, Literal
+import json
+
+
+class AgentGenerationError(RuntimeError):
+    """모델 호출 실패 또는 유효하지 않은 생성 결과."""
+
+
+def generate(model, prompt, payload, output_instruction=""):
+    """주입된 채팅 모델에 프롬프트와 입력을 전달한다."""
+    messages = [
+        {"role": "system", "content": prompt + "\n\n" + output_instruction},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, allow_nan=False)},
+    ]
+    try:
+        response = model.invoke(messages)
+        content = response if isinstance(response, str) else response.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("빈 응답 또는 지원하지 않는 응답 형식")
+        return content.strip()
+    except Exception as exc:
+        raise AgentGenerationError("LLM 호출 또는 응답 읽기에 실패했습니다") from exc
+
+
+def generate_json(model, prompt, payload, instruction):
+    content = generate(model, prompt, payload, instruction)
+    try:
+        value = json.loads(content)
+        if not isinstance(value, dict):
+            raise ValueError("JSON 객체가 필요합니다")
+        return value
+    except (ValueError, TypeError) as exc:
+        raise AgentGenerationError("LLM 응답이 유효한 JSON 객체가 아닙니다") from exc
 
 
 CRITERIA = {
@@ -140,6 +172,10 @@ class InvestmentAgentInput(Serializable):
     # agents/tech_brief.py에서 받을 제품·기술 AgentResult (agent_name="technology").
     # evaluations에 제품·기술 정보의 구체성 / 제품 차별성·성능 정보의 명확성을 담는다.
     tech_result: Any = None
+    company_context: dict = field(default_factory=dict)
+    evidence_review: dict = field(default_factory=dict)
+    criteria_met: bool | None = None
+    evaluation_settings: dict = field(default_factory=dict)
 
     # TODO(RAG/공통 모델 연동): agents/founder_insight.py, agents/market_scout.py,
     # agents/tech_brief.py의 출력 계약 확정 후 이 파일의 validate_specialist()와
@@ -151,6 +187,11 @@ class InvestmentAgentInput(Serializable):
 
     def __post_init__(self):
         nonempty(self.company_name, "company_name")
+        for key in ("company_context", "evidence_review", "evaluation_settings"):
+            setattr(self, key, mapping(getattr(self, key), key))
+        require(self.criteria_met is None or type(self.criteria_met) is bool, "criteria_met: bool 또는 None 필요")
+        if "company_name" in self.company_context:
+            require(self.company_context["company_name"] == self.company_name, "company_context 기업명 불일치")
         for name, role in (("founder_result", "founder"), ("market_result", "market"),
                            ("tech_result", "technology")):
             value = getattr(self, name)
@@ -191,6 +232,7 @@ class ReportAgentInput(InvestmentAgentInput):
     # market_result / tech_result는 위 입력 모델에서 상속한다.
     # Graph는 해당 RAG 결과로 산출한 investment_result를 함께 전달해야 한다.
     investment_result: Any = None
+    evaluation_status: str | None = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -199,6 +241,10 @@ class ReportAgentInput(InvestmentAgentInput):
         require(self.investment_result.company_name == self.company_name, "투자 판단의 company_name 불일치")
         require(self.investment_result.total_score == calculate_total(self.results),
                 "투자 판단 총점과 전문 Agent 점수 합계가 다릅니다")
+        if self.evaluation_status is None:
+            self.evaluation_status = self.investment_result.decision
+        require(self.evaluation_status == self.investment_result.decision,
+                "evaluation_status와 투자 판단이 다릅니다")
 
 
 @dataclass

@@ -6,13 +6,14 @@
 
 ### 종합 투자 판단·보고서 Agent 실행
 
-Python 3.10 이상이 필요합니다. 현재 이 두 Agent와 실행 예제는 표준 라이브러리만 사용하므로 패키지 설치와 API 키가 필요하지 않습니다. 의존성 범위는 `requirements-agent.txt`에 명시했습니다.
+Python 3.10 이상이 필요합니다. 공통 모델에 필요한 Pydantic은 `requirements-agent.txt`로 설치합니다. Mock 실행에는 API 키가 필요하지 않습니다. 실제 LLM 실행은 호출하는 애플리케이션에서 모델과 인증을 설정해야 합니다.
 
 처음 받는 경우:
 
 ```sh
 git clone --branch agent https://github.com/yu4923/skala-rag.git
 cd skala-rag
+python3 -m pip install -r requirements-agent.txt
 python3 demo_agents.py
 ```
 
