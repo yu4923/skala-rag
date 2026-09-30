@@ -37,11 +37,11 @@
 
 | Agent | 모듈 파일명 | 역할 | 활용 방식 | 담당 배점 |
 |---|---|---|---|---:|
-| **Founder Insight** | `founder_insight_agent.py` | 창업자·핵심 팀의 경력, 에너지 분야 전문성, 과거 창업·사업화 경험을 조사하고 역량 평가 | 웹 검색 및 교차검증 | 25 |
-| **Market Scout** | `market_scout_agent.py` | 시장 규모·성장 가능성과 PoC·유료 고객·장기계약 등 실제 고객 수요 평가 | RAG, 웹 검색, 계산 Tool | 50 |
-| **Tech Brief** | `tech_brief_agent.py` | 주요 제품, 기술 작동 원리, 적용 분야, 차별성, 공개된 성능·비용 정보를 요약하고 담당 항목의 점수 산정 | RAG, 웹 검색 | 25 |
-| **investment_evaluator** | `investment_evaluator.py` | 전문 Agent의 평가 결과와 근거를 검토하고 점수를 합산하여 최종 투자 판단 도출 | 통합 State, LLM 기반 판단, 점수 합산 로직 | 종합 100 |
-| **report_generator** | `report_generator.py` | 전문 평가 결과와 최종 판단을 바탕으로 SUMMARY·본문·REFERENCE 작성 | 통합 State, LLM 기반 보고서 생성 | — |
+| **Founder Insight** | `founder_insight_agents.py` | 창업자·핵심 팀의 경력, 에너지 분야 전문성, 과거 창업·사업화 경험을 조사하고 역량 평가 | 웹 검색 및 교차검증 | 25 |
+| **Market Scout** | `market_scout_agents.py` | 시장 규모·성장 가능성과 PoC·유료 고객·장기계약 등 실제 고객 수요 평가 | RAG, 웹 검색, 계산 Tool | 50 |
+| **Tech Brief** | `tech_brief_agents.py` | 주요 제품, 기술 작동 원리, 적용 분야, 차별성, 공개된 성능·비용 정보를 요약하고 담당 항목의 점수 산정 | RAG, 웹 검색 | 25 |
+| **investment_evaluator** | `investment_evaluator_agents.py` | 전문 Agent의 평가 결과와 근거를 검토하고 점수를 합산하여 최종 투자 판단 도출 | 통합 State, LLM 기반 판단, 점수 합산 로직 | 종합 100 |
+| **report_generator** | `report_generator_agents.py` | 전문 평가 결과와 최종 판단을 바탕으로 SUMMARY·본문·REFERENCE 작성 | 통합 State, LLM 기반 보고서 생성 | — |
 
 세 전문 평가 Agent는 담당 항목별 점수, 산정 이유, 근거와 출처, 추가 확인사항을 반환합니다. investment_evaluator는 이를 종합해 최종 판단을 생성하고, report_generator는 평가 결과를 보고서로 작성합니다. Tech Brief는 제품·기술 요약과 함께 정보의 구체성 및 명확성을 평가합니다. 이 점수는 기술 타당성이나 실제 성능을 독립적으로 검증한 결과를 의미하지 않습니다.
 
@@ -104,7 +104,9 @@ flowchart TD
 ├── agents/                # 평가 기준별 Agent 모듈
 ├── prompts/               # 프롬프트 템플릿
 ├── outputs/               # 평가 결과 저장
-├── app.py                 # 실행 스크립트
+├── state.py               # 공유 State 및 데이터 타입
+├── graph.py               # 평가 설정, 노드 함수 및 그래프 연결
+├── app.py                 # 실행 함수
 └── README.md
 ```
 
