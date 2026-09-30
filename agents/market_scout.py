@@ -388,6 +388,18 @@ def create_market_scout(model: Any, web_search: MarketSearch, rag_search: Market
     return MarketScoutAgent(model, web_search, rag_search, **kwargs)
 
 
+def _default_rag_search(query: str) -> list[dict[str, Any]]:
+    from market_rag.market_scout import rag_search
+    return rag_search(query)
+
+
+def _default_web_search(query: str) -> list[MarketSource]:
+    from .founder_insight import _default_web_search as tavily_search
+    return [MarketSource(source_title=item.source_title, source_type="web",
+                         source=item.source_url, excerpt=item.claim)
+            for item in tavily_search(query)]
+
+
 def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Graph State를 기존 시장성 Agent의 입력 및 Graph 결과 계약으로 변환한다."""
     context = state["company_context"]
@@ -406,10 +418,9 @@ def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     if model is None:
         from langchain_openai import ChatOpenAI
         model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
-    empty_search = lambda query: []
     agent = create_market_scout(
-        model, kwargs.get("web_search") or empty_search,
-        kwargs.get("rag_search") or empty_search,
+        model, kwargs.get("web_search") or _default_web_search,
+        kwargs.get("rag_search") or _default_rag_search,
     )
     result = agent.run(request, config=kwargs.get("config"))
     assessment = result.assessment

@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 # agents/ 안에서 python founder_insight.py로 실행한 경우에도 패키지 경로를 설정한다.
@@ -168,6 +169,8 @@ class FounderInsightAgent:
                         reason = f"근거 필드 검증 실패 ({', '.join(fields)})"
                     elif isinstance(exc, ValueError):
                         reason = str(exc)
+                    elif isinstance(exc, HTTPError):
+                        reason = f"HTTP 상태 {exc.code}"
                     else:
                         reason = "검색 요청 또는 응답 처리 실패"
                     logger.warning("founder.search_failed: %s: %s", type(exc).__name__, reason)
@@ -264,10 +267,11 @@ create_founder_insight = create_founder_agent
 def _default_web_search(query: str) -> list[Evidence]:
     """Graph가 검색기를 주입하지 않을 때 Tavily 웹 검색 결과를 공통 근거로 변환한다."""
     api_key = os.environ["TAVILY_API_KEY"]
-    payload = json.dumps({"api_key": api_key, "query": query,
+    payload = json.dumps({"query": query,
                           "max_results": TAVILY_MAX_RESULTS}).encode("utf-8")
     request = Request(TAVILY_API_URL, data=payload,
-                      headers={"Content-Type": "application/json"})
+                      headers={"Authorization": f"Bearer {api_key}",
+                               "Content-Type": "application/json"})
     with urlopen(request, timeout=30) as response:
         results = json.load(response)["results"]
     return [Evidence(evidence_id=f"web-{sha256(json.dumps([item['url'], item['content'], item.get('title') or item['url']], ensure_ascii=False).encode()).hexdigest()[:20]}", claim=item["content"],

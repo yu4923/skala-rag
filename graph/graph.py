@@ -505,5 +505,4 @@ def configure_logging(enable_tracing: bool):
     project_name = setting("LANGSMITH_PROJECT")
     if not ENV.get("LANGSMITH_API_KEY"):
         raise ValueError(".env에 LangSmith API 키를 설정하세요.")
-    from langchain_teddynote import logging
-    logging.langsmith(project_name=project_name)
+    os.environ["LANGSMITH_PROJECT"] = project_name
