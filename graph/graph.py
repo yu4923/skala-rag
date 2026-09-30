@@ -3,36 +3,59 @@ import os
 from copy import deepcopy
 from importlib import import_module
 from pathlib import Path
+from dotenv import dotenv_values, load_dotenv
 from .state import InvestmentState
 
 from langgraph.graph import END, START, StateGraph
 
 
 # ──────────────────────────────────────
-# 평가 기준 및 실행 설정: 변경할 값은 이곳에서 관리
+# 평가 기준 및 실행 설정: .env에서 관리
 # ──────────────────────────────────────
 
-RECOMMEND_SCORE = 75.0
-RAW_SCORE_MAX = 5.0
-MIN_CRITERION_SCORE = 3.0
-MAX_RETRIES = 1
-MIN_EVIDENCE_COUNT = 1
-STOP_ON_FIRST_RECOMMENDATION = True
-GRAPH_RECURSION_LIMIT = 500
-SCORE_TOLERANCE = 1e-6
-ENABLE_LANGSMITH = False
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV = dotenv_values(ENV_PATH)
+load_dotenv(dotenv_path=ENV_PATH, override=True)
+
+
+def setting(name, convert=str):
+    value = ENV.get(name)
+    if value is None or not value.strip():
+        raise ValueError(f".env에 {name} 값을 설정하세요.")
+    try:
+        return convert(value)
+    except ValueError as exc:
+        raise ValueError(f".env의 {name} 값이 올바르지 않습니다: {value!r}") from exc
+
+
+def boolean_setting(name):
+    value = setting(name).lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f".env의 {name} 값은 true 또는 false여야 합니다.")
+    return value == "true"
+
+
+RECOMMEND_SCORE = setting("RECOMMEND_SCORE", float)
+RAW_SCORE_MAX = setting("RAW_SCORE_MAX", float)
+MIN_CRITERION_SCORE = setting("MIN_CRITERION_SCORE", float)
+MAX_RETRIES = setting("MAX_RETRIES", int)
+MIN_EVIDENCE_COUNT = setting("MIN_EVIDENCE_COUNT", int)
+STOP_ON_FIRST_RECOMMENDATION = boolean_setting("STOP_ON_FIRST_RECOMMENDATION")
+GRAPH_RECURSION_LIMIT = setting("GRAPH_RECURSION_LIMIT", int)
+SCORE_TOLERANCE = setting("SCORE_TOLERANCE", float)
+ENABLE_LANGSMITH = boolean_setting("LANGSMITH_TRACING")
 
 CRITERIA = {
     "founder_insight": [
-        ("창업자·팀 역량", 25.0),
+        ("창업자·팀 역량", setting("FOUNDER_WEIGHT", float)),
     ],
     "market_scout": [
-        ("시장 규모·성장 가능성", 25.0),
-        ("실제 고객 수요", 25.0),
+        ("시장 규모·성장 가능성", setting("MARKET_GROWTH_WEIGHT", float)),
+        ("실제 고객 수요", setting("CUSTOMER_DEMAND_WEIGHT", float)),
     ],
     "tech_brief": [
-        ("제품·기술 정보의 구체성", 15.0),
-        ("제품 차별성·성능 정보의 명확성", 10.0),
+        ("제품·기술 정보의 구체성", setting("TECH_SPECIFICITY_WEIGHT", float)),
+        ("제품 차별성·성능 정보의 명확성", setting("TECH_DIFFERENTIATION_WEIGHT", float)),
     ],
 }
 
@@ -473,18 +496,14 @@ def make_initial_state(companies: list[str], request: str) -> InvestmentState:
 
 
 def configure_logging(enable_tracing: bool):
-    from dotenv import load_dotenv
-
-    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=True)
     if not enable_tracing:
         os.environ["LANGSMITH_TRACING"] = "false"
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
         return
-    project_name = os.environ.get("LANGSMITH_PROJECT")
-    if not project_name:
-        raise ValueError(".env에 LANGSMITH_PROJECT를 설정하세요.")
-    if not (os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")):
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    project_name = setting("LANGSMITH_PROJECT")
+    if not ENV.get("LANGSMITH_API_KEY"):
         raise ValueError(".env에 LangSmith API 키를 설정하세요.")
     from langchain_teddynote import logging
     logging.langsmith(project_name=project_name)
-

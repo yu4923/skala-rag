@@ -5,20 +5,19 @@ from graph.graph import (
     build_graph,
     configure_logging,
     make_initial_state,
+    setting,
 )
 
-COMPANIES = ["엔라이튼", "해줌", "식스티헤르츠", "시너지", "인코어드테크놀로지스", "브이피피랩", "브이젠", "에너지엑스", "크로커스에너지", "러셀"]
-DEFAULT_REQUEST = "각 기업의 투자 가능성을 종합적으로 평가해서 보고서를 작성해줘"
+COMPANIES = [name.strip() for name in setting("COMPANIES").split(",")]
+DEFAULT_REQUEST = setting("DEFAULT_REQUEST")
 
 def main():
     parser = argparse.ArgumentParser(description="에너지 스타트업 투자 평가")
-    parser.add_argument("--companies", nargs="+", default=COMPANIES)
-    parser.add_argument("--request", default=DEFAULT_REQUEST)
     parser.add_argument("--trace", action=argparse.BooleanOptionalAction, default=ENABLE_LANGSMITH)
     args = parser.parse_args()
 
     configure_logging(args.trace)
-    initial_state = make_initial_state(args.companies, args.request)
+    initial_state = make_initial_state(COMPANIES, DEFAULT_REQUEST)
     result = build_graph().invoke(initial_state, config={"recursion_limit": GRAPH_RECURSION_LIMIT})
     if "report" in result:
         print(result["report"])
