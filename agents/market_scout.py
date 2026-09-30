@@ -35,9 +35,29 @@ from .evaluation_support import (
     CRITERIA, AgentResult, ContractModel, CriterionEvaluation, Evidence,
 )
 
+# 프로젝트 .env 또는 상위 디렉터리의 env 파일을 읽는다. 기존 환경변수가 우선한다.
+def _load_env() -> None:
+    project = Path(__file__).resolve().parents[1]
+    for path in (project / ".env", project.parent / "env"):
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+            break
+
+
+_load_env()
+
 logger = logging.getLogger(__name__)
-MARKET_CRITERIA = dict(CRITERIA["market"])
-MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o-mini")
+MARKET_CRITERIA = {
+    "시장 규모·성장 가능성": float(os.environ["MARKET_GROWTH_WEIGHT"]),
+    "실제 고객 수요": float(os.environ["CUSTOMER_DEMAND_WEIGHT"]),
+}
+CRITERIA["market"].update(MARKET_CRITERIA)
+MODEL_NAME = os.environ["MARKET_MODEL"]
 MODEL_TEMPERATURE = 0
 
 
@@ -79,7 +99,7 @@ class MarketAgentInput(ContractModel):
     @model_validator(mode="after")
     def validate_contract(self):
         if self.criteria != MARKET_CRITERIA:
-            raise ValueError("시장성 평가 항목과 배점은 CRITERIA['market']의 25점+25점 계약을 따릅니다.")
+            raise ValueError("시장성 평가 항목과 배점은 MARKET_CRITERIA 계약을 따릅니다.")
         if any(item.source_type != "input" for item in self.input_evidence):
             raise ValueError("input_evidence의 source_type은 input이어야 합니다.")
         return self
@@ -96,8 +116,8 @@ class MarketCitation(ContractModel):
 
 class MarketScore(ContractModel):
     criterion: str = Field(min_length=1)
-    score: float | None = Field(ge=0, le=25)
-    max_score: Literal[25]
+    score: float | None = Field(ge=0)
+    max_score: float = Field(gt=0)
     reason: str = Field(min_length=1)
     evidence_ids: list[str] = Field(default_factory=list)
 
@@ -120,6 +140,10 @@ class MarketAssessment(ContractModel):
         criteria = [item.criterion for item in self.scores]
         if len(set(criteria)) != 2 or set(criteria) != set(MARKET_CRITERIA):
             raise ValueError("시장 규모·성장 가능성/실제 고객 수요 항목이 각각 하나씩 필요합니다.")
+        if any(item.max_score != MARKET_CRITERIA[item.criterion] for item in self.scores):
+            raise ValueError("시장성 평가 항목의 배점이 설정과 다릅니다.")
+        if any(item.score is not None and item.score > item.max_score for item in self.scores):
+            raise ValueError("시장성 평가 점수가 배점을 초과합니다.")
         ids = [item.evidence_id for item in self.evidence]
         if len(set(ids)) != len(ids):
             raise ValueError("응답의 evidence_id가 중복되었습니다.")

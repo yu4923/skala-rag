@@ -27,13 +27,29 @@ from prompts import founder_insight_prompt
 
 from .evaluation_support import AgentResult, ContractModel, CriterionEvaluation, Evidence
 
+# 프로젝트 .env 또는 상위 디렉터리의 env 파일을 읽는다. 기존 환경변수가 우선한다.
+def _load_env() -> None:
+    project = Path(__file__).resolve().parents[1]
+    for path in (project / ".env", project.parent / "env"):
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+            break
+
+
+_load_env()
+
 # Graph 호출 시 모델을 별도로 주입하지 않으면 이 설정으로 생성한다.
-MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o-mini")
+MODEL_NAME = os.environ["FOUNDER_MODEL"]
 MODEL_TEMPERATURE = 0
 TAVILY_API_URL = "https://api.tavily.com/search"
 TAVILY_MAX_RESULTS = 5
 FOUNDER_CRITERION = "창업자·팀 역량"
-FOUNDER_MAX_SCORE = 25.0
+FOUNDER_MAX_SCORE = float(os.environ["FOUNDER_WEIGHT"])
 
 # common.py가 없는 팀 저장소에서도 공개 Agent를 독립적으로 import할 수 있다.
 Search = Callable[[str], Sequence[Any]]
