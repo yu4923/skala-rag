@@ -5,6 +5,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
+from hashlib import sha256
 from itertools import islice
 from pathlib import Path
 from threading import Lock
@@ -21,7 +22,8 @@ from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field, field_validator
+from langgraph.errors import GraphRecursionError
+from pydantic import Field, ValidationError, field_validator
 
 from prompts import founder_insight_prompt
 
@@ -161,7 +163,14 @@ class FounderInsightAgent:
                     return json.dumps([{**item.model_dump(), "checked_at": checked_at.isoformat()}
                                        for item in batch.values()], ensure_ascii=False)
                 except Exception as exc:
-                    logger.warning("founder.search_failed: %s", type(exc).__name__)
+                    if isinstance(exc, ValidationError):
+                        fields = sorted({".".join(map(str, error["loc"])) for error in exc.errors()})
+                        reason = f"근거 필드 검증 실패 ({', '.join(fields)})"
+                    elif isinstance(exc, ValueError):
+                        reason = str(exc)
+                    else:
+                        reason = "검색 요청 또는 응답 처리 실패"
+                    logger.warning("founder.search_failed: %s: %s", type(exc).__name__, reason)
                     issues.append("일부 웹 검색이 실패하여 경력·사업화 이력의 추가 확인이 필요합니다.")
                     return json.dumps({"error": "검색 실패. 다른 검색어로 재시도하세요."}, ensure_ascii=False)
 
@@ -178,9 +187,23 @@ class FounderInsightAgent:
                        "initial_evidence": [json.loads(value) for value in initial]}
             child_config = dict(config or {})
             child_config["recursion_limit"] = self.recursion_limit
-            response = agent.invoke({"messages": [("user", json.dumps(payload, ensure_ascii=False))]},
-                                    config=child_config)
-            assessment = FounderAssessment.model_validate(response["structured_response"])
+            try:
+                response = agent.invoke({"messages": [("user", json.dumps(payload, ensure_ascii=False))]},
+                                        config=child_config)
+                assessment = FounderAssessment.model_validate(response["structured_response"])
+            except GraphRecursionError:
+                # 도구 호출 루프가 끝나지 않으면 이미 확보한 근거로 단일 구조화 응답을 받는다.
+                logger.warning("founder.search_limit_reached: 확보한 근거로 평가를 마무리합니다.")
+                payload["initial_evidence"] = [
+                    {**item.model_dump(), "checked_at": checked_at.isoformat()}
+                    for item in registry.values()
+                ]
+                final_prompt = self.system_prompt + "\n추가 검색 없이 제공된 근거만으로 최종 평가를 반환하라."
+                direct = self.model.with_structured_output(FounderAssessment).invoke(
+                    [("system", final_prompt), ("user", json.dumps(payload, ensure_ascii=False))],
+                    config=config,
+                )
+                assessment = FounderAssessment.model_validate(direct)
             # URL과 제목이 실제 검색 원장에 존재해야 한다. 같은 URL의 청크는 모두 보존한다.
             used: dict[str, Evidence] = {}
             for citation in assessment.evidence:
@@ -247,7 +270,7 @@ def _default_web_search(query: str) -> list[Evidence]:
                       headers={"Content-Type": "application/json"})
     with urlopen(request, timeout=30) as response:
         results = json.load(response)["results"]
-    return [Evidence(evidence_id=f"web-{item['url']}", claim=item["content"],
+    return [Evidence(evidence_id=f"web-{sha256(json.dumps([item['url'], item['content'], item.get('title') or item['url']], ensure_ascii=False).encode()).hexdigest()[:20]}", claim=item["content"],
                      source_title=item.get("title") or item["url"],
                      source_url=item["url"], page=None) for item in results]
 
