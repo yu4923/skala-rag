@@ -5,7 +5,13 @@ from prompts.investment_evaluator_prompt import INVESTMENT_EVALUATOR_PROMPT as I
 from .evaluation_support import (
     CRITERIA, InvestmentAgentInput, InvestmentResult, calculate_total,
     collect_evidence, mapping, unique, generate,
+    graph_agent_input, resolve_model, require,
 )
+
+# 실행 설정: 외부에서 model을 주입하면 이 기본값보다 우선한다.
+MODEL = None
+MODEL_FACTORY = None
+MODEL_SETTINGS = {}  # MODEL_FACTORY가 받을 모델명/온도 등. 제공자별 키를 여기서 설정한다.
 
 # 프롬프트 수정 위치: prompts/investment_evaluator_prompt.py의 INVESTMENT_EVALUATOR_PROMPT.
 # 위 import로 직접 불러오므로 Agent 코드에 본문을 복사하지 않는다.
@@ -44,11 +50,15 @@ class InvestmentEvaluator:
             if result["needs_more_information"] and not result["missing_information"]:
                 missing.append(f"{role}: 추가 정보 요청의 구체적인 내용 확인 필요")
         needs_more = bool(needs_more or missing)
-        reasons.append("투자 통과·보류 기준 미확정으로 최종 판단 대기")
+        if data.criteria_met is None:
+            reasons.append("투자 통과·보류 기준 미확정으로 최종 판단 대기")
+        else:
+            reasons.append(f"Graph가 계산한 투자 기준 충족 여부: {data.criteria_met}")
+        decision = "pending" if data.criteria_met is None else "recommend" if data.criteria_met else "reject"
         result = InvestmentResult(
             company_name=data.company_name,
             total_score=calculate_total(data.results),
-            decision="additional_research" if needs_more else "pending",
+            decision="additional_research" if needs_more else decision,
             key_reasons=unique(reasons), risks=unique(risks),
             missing_information=unique(missing), needs_more_information=needs_more,
         )
@@ -63,3 +73,17 @@ class InvestmentEvaluator:
             )
             result.key_reasons.append(explanation)
         return result
+
+
+def run(state, *, model=None, total_score=None, criteria_met=None, **kwargs):
+    """Graph가 계산한 총점/기준 여부를 검증하고 기존 Agent의 판단 설명 문자열을 반환한다."""
+    values = graph_agent_input(state)
+    values["criteria_met"] = criteria_met
+    if "evaluation_settings" in kwargs:
+        values["evaluation_settings"] = kwargs["evaluation_settings"]
+    data = InvestmentAgentInput(**values)
+    require(type(criteria_met) is bool, "Graph가 계산한 criteria_met이 필요합니다")
+    require(type(total_score) in (int, float) and total_score == calculate_total(data.results),
+            "Graph 총점과 전문 평가 점수 합계가 다릅니다")
+    result = InvestmentEvaluator(resolve_model(model, MODEL, MODEL_FACTORY, MODEL_SETTINGS)).invoke(data)
+    return "\n".join(result.key_reasons)
