@@ -16,13 +16,13 @@
 
 ```python
 MODEL = None           # 이미 만든 모델 인스턴스를 기본값으로 지정할 때 사용
-MODEL_FACTORY = None   # 모델 생성 함수를 사용할 때 지정
-MODEL_SETTINGS = {}    # 위 팩터리가 받는 모델명·온도 등 keyword arguments
+MODEL_FACTORY = create_model_from_env  # 공통 보조 파일의 .env 기반 ChatOpenAI 팩터리
+MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 선택 model/temperature도 여기서 지정 가능
 # tech_brief.py에만 추가로 존재
 RETRIEVER = None
 ```
 
-외부 `model=` 주입 → 모듈 `MODEL` → `MODEL_FACTORY(**MODEL_SETTINGS)` 순으로 선택한다. 임의 제공자나 모델명은 추가하지 않았다. 실제 모델의 생성 함수와 모델명/옵션을 파일 상단에서 설정하면 `run()` 안의 코드를 수정할 필요가 없다. Graph 초기화 코드에서 이미 만든 객체를 각 모듈의 `MODEL`과 제품·기술 모듈의 `RETRIEVER`에 설정하는 방법도 가능하다. 모델·검색 객체는 직렬화되는 State에 넣지 않는다.
+외부 `model=` 주입 → 모듈 `MODEL` → `MODEL_FACTORY(**MODEL_SETTINGS)` 순으로 선택한다. 기본 팩터리는 기존 프로젝트에서 사용하는 ChatOpenAI를 생성하며 특정 모델명은 지정하지 않는다. `agents/evaluation_support.py`의 `create_model_from_env()`가 실행 위치와 무관하게 저장소 루트 `.env`를 읽는다. `OPENAI_API_KEY` 및 `LLM_MODEL`(대체 이름 `OPENAI_MODEL`)이 필요하다. 셸 환경변수가 파일보다 우선하며 전역 환경을 덮어쓰지 않는다. 키·모델명이 없으면 `ModelConfigurationError`로 명확히 실패한다. 파일 상단 설정 또는 기존 외부 주입으로 모델을 바꿀 수 있다. 모델·검색 객체는 State에 넣지 않는다.
 
 직접 어댑터를 확인할 때는 아래처럼 외부 주입할 수 있다.
 
@@ -34,13 +34,15 @@ reason = investment_evaluator.run(state, model=model, total_score=total, criteri
 report = report_generator.run(state, model=model)
 ```
 
-각 호출에는 해당 단계까지 완성된 State가 필요하다. 기존 Graph는 `run()`에 모델을 전달하지 않으므로 실제 Graph 실행 전에는 모듈 설정을 완료해야 한다. 모델이 없는 종합 판단/보고서는 기존 오프라인 동작을 유지하고, 제품·기술은 모델 또는 Retriever 미설정 시 명확한 설정 오류를 반환한다.
+각 호출에는 해당 단계까지 완성된 State가 필요하다. 기존 Graph는 `run()`에 모델을 전달하지 않으므로 기본 팩터리가 `.env`에서 생성한다. `run()`은 환경 설정 누락 시 오프라인 결과로 조용히 대체하지 않는다. 단독 클래스 `InvestmentEvaluator()`/`ReportGenerator()` 및 옵션 없는 `demo_agents.py`는 기존 오프라인 동작을 유지한다. 제품·기술의 실제 Retriever는 별도 주입이 필요하다.
 
 Graph의 `recommend`/`reject`는 공통 투자 결과에서 그대로 보존한다. `criteria_met`이 없는 기존 단독 실행의 pending/additional_research 동작은 유지한다. 보고서는 투자 판단이 실행되지 않은 보류 기록도 총점 미산정으로 표시하고, 여러 기업 기록을 각각 기존 보고서 Agent로 작성한다. 미실행 평가나 누락된 점수를 임의 생성하지 않는다.
 
 검증은 `GraphAdapterTests`에 포함했다. 실제 `graph.graph` 디스패처/검증기 검사는 해당 폴더와 `langgraph` 패키지가 있을 때 실행하고, 없으면 그 통합 테스트만 건너뛴다. 현재 검증 환경에서는 설치 후 통합 테스트까지 실행했다.
 
-남은 전체 Graph 연결 항목: `integrate_results()`가 별도로 호출하는 `investment_evaluator.review_evidence()`는 기존에 없으며 이번 run 어댑터 범위에서는 추가하지 않았다. 창업자/시장성 모듈의 Graph 진입점, 실제 모델·Retriever 설정도 각 담당 범위에서 연결해야 한다. 이 세 run의 통합 테스트 통과가 전체 파이프라인 완성을 의미하지는 않는다.
+남은 전체 Graph 연결 항목: `integrate_results()`가 별도로 호출하는 `investment_evaluator.review_evidence()`는 기존에 없으며 이번 run 어댑터 범위에서는 추가하지 않았다. 실제 Retriever 설정과 다른 Agent의 데이터 계약도 각 담당 범위에서 확인해야 한다. 이 세 run의 통합 테스트 통과가 전체 파이프라인 완성을 의미하지는 않는다.
+
+환경 연결 검증: `python3 demo_agents.py --check-config`는 API 호출 없이 모델 구성만 확인하고, `python3 demo_agents.py --llm`은 Mock 기업 입력으로 실제 LLM 두 번을 호출한다(API 비용 발생). 실제 검색 파이프라인은 실행하지 않는다. 환경 로딩·오류·우선순위·외부 주입·오프라인 유지 검사는 기존 테스트 파일의 `EnvironmentModelTests`에 있다. 테스트는 가짜 환경 값과 Mock 생성자를 사용해 실제 `.env`/API에 접근하지 않는다.
 
 ## 제품·기술 요약 Agent
 

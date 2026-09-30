@@ -6,12 +6,13 @@ from .evaluation_support import (
     CRITERIA, InvestmentAgentInput, InvestmentResult, calculate_total,
     collect_evidence, mapping, unique, generate,
     graph_agent_input, resolve_model, require,
+    create_model_from_env,
 )
 
 # 실행 설정: 외부에서 model을 주입하면 이 기본값보다 우선한다.
 MODEL = None
-MODEL_FACTORY = None
-MODEL_SETTINGS = {}  # MODEL_FACTORY가 받을 모델명/온도 등. 제공자별 키를 여기서 설정한다.
+MODEL_FACTORY = create_model_from_env
+MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 모델명은 .env의 LLM_MODEL에서 읽는다.
 
 # 프롬프트 수정 위치: prompts/investment_evaluator_prompt.py의 INVESTMENT_EVALUATOR_PROMPT.
 # 위 import로 직접 불러오므로 Agent 코드에 본문을 복사하지 않는다.

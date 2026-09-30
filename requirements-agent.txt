@@ -2,6 +2,8 @@
 # InvestmentEvaluator, ReportGenerator, demo_agents.py and their tests
 # require Pydantic for the shared specialist models. Mock tests need no API keys.
 pydantic>=2,<3
+python-dotenv>=1,<2
+langchain-openai>=1.0,<2
 # This is not a dependency list for the future full Graph/RAG/LLM application.
-# Live LLM calls require a caller-supplied model implementing invoke(messages).
-# Install/configure the selected provider's packages in the calling application.
+# run() loads OPENAI_API_KEY and LLM_MODEL (OPENAI_MODEL alias) from the project .env.
+# Directly injected models still take precedence. Offline demo/tests need no credentials.

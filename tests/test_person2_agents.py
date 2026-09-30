@@ -2,12 +2,16 @@
 
 from copy import deepcopy
 import json
+import os
+import sys
+from io import StringIO
 import unittest
 
 from agents.evaluation_support import (
     CRITERIA, InputValidationError, InvestmentAgentInput, InvestmentResult,
     ReportAgentInput,
     AgentGenerationError,
+    create_model_from_env, ModelConfigurationError,
 )
 from agents.investment_evaluator import InvestmentEvaluator, INVESTMENT_SYSTEM_PROMPT
 from agents.report_generator import ReportGenerator, REPORT_SYSTEM_PROMPT
@@ -460,6 +464,11 @@ class GraphAdapterTests(unittest.TestCase):
     def setUp(self):
         from agents import tech_brief, investment_evaluator, report_generator
         self.tech, self.investment, self.report = tech_brief, investment_evaluator, report_generator
+        # 단위 테스트는 로컬 .env나 실제 API를 사용하지 않는다.
+        for module in (self.tech, self.investment, self.report):
+            factory_patch = patch.object(module, "MODEL_FACTORY", None)
+            factory_patch.start()
+            self.addCleanup(factory_patch.stop)
         data = mock_input()
         self.state = {
             "company_context": {"company_name": data["company_name"], "company_candidates": [data["company_name"]], "company_index": 0},
@@ -595,6 +604,101 @@ class GraphAdapterTests(unittest.TestCase):
         report_update = graph.report_generator(self.state)
         self.assertNotIn("errors", report_update)
         self.assertIn("recommend", report_update["report"])
+
+
+class EnvironmentModelTests(unittest.TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        dotenv = patch("dotenv.dotenv_values", return_value={"OPENAI_API_KEY": "test-only-key", "LLM_MODEL": "test-model"})
+        self.values = dotenv.start()
+        self.addCleanup(dotenv.stop)
+        constructor = patch("langchain_openai.ChatOpenAI")
+        self.constructor = constructor.start()
+        self.addCleanup(constructor.stop)
+
+    def test_reads_project_env_and_constructs_without_request(self):
+        from agents.evaluation_support import ENV_FILE
+        model = create_model_from_env()
+        self.values.assert_called_once_with(ENV_FILE)
+        self.constructor.assert_called_once_with(model="test-model", api_key="test-only-key", timeout=60, max_retries=2)
+        model.invoke.assert_not_called()
+        self.assertNotIn("OPENAI_API_KEY", os.environ)
+
+    def test_process_environment_wins(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "process-test-key", "LLM_MODEL": "process-model"}):
+            create_model_from_env()
+        self.assertEqual(self.constructor.call_args.kwargs["model"], "process-model")
+        self.assertEqual(self.constructor.call_args.kwargs["api_key"], "process-test-key")
+
+    def test_alias_and_conflict(self):
+        self.values.return_value = {"OPENAI_API_KEY": "test-only-key", "OPENAI_MODEL": "alias-model"}
+        create_model_from_env()
+        self.assertEqual(self.constructor.call_args.kwargs["model"], "alias-model")
+        self.values.return_value["LLM_MODEL"] = "different-model"
+        with self.assertRaises(ModelConfigurationError):
+            create_model_from_env()
+
+    def test_missing_settings_fail_without_exposing_secret(self):
+        for values in ({}, {"LLM_MODEL": "test-model"}, {"OPENAI_API_KEY": "test-only-key"}):
+            with self.subTest(keys=list(values)):
+                self.values.return_value = values
+                with self.assertRaises(ModelConfigurationError) as caught:
+                    create_model_from_env()
+                self.assertNotIn("test-only-key", str(caught.exception))
+        self.constructor.assert_not_called()
+
+    def test_settings_can_override_model_without_hardcoded_logic(self):
+        create_model_from_env(model="custom-test-model", temperature=0.2, timeout=20, max_retries=0)
+        self.assertEqual(self.constructor.call_args.kwargs["model"], "custom-test-model")
+        self.assertEqual(self.constructor.call_args.kwargs["temperature"], 0.2)
+        self.assertEqual(self.constructor.call_args.kwargs["timeout"], 20)
+
+    def test_all_three_module_defaults_use_env_factory(self):
+        from agents import tech_brief, investment_evaluator, report_generator
+        from agents.evaluation_support import resolve_model
+        for module in (tech_brief, investment_evaluator, report_generator):
+            with self.subTest(module=module.__name__):
+                self.assertIs(module.MODEL_FACTORY, create_model_from_env)
+                self.assertIs(resolve_model(None, module.MODEL, module.MODEL_FACTORY, module.MODEL_SETTINGS),
+                              self.constructor.return_value)
+                self.constructor.reset_mock()
+                injected = FakeModel("외부 모델")
+                self.assertIs(resolve_model(injected, module.MODEL, module.MODEL_FACTORY, module.MODEL_SETTINGS), injected)
+                self.constructor.assert_not_called()
+
+    def test_demo_default_remains_offline(self):
+        import demo_agents
+        with patch.object(sys, "argv", ["demo_agents.py"]), patch("sys.stdout", new_callable=StringIO) as stdout:
+            demo_agents.main()
+        self.assertEqual(json.loads(stdout.getvalue())["investment_result"]["decision"], "pending")
+        self.values.assert_not_called()
+        self.constructor.assert_not_called()
+
+    def test_demo_check_config_never_invokes_model(self):
+        import demo_agents
+        with patch.object(sys, "argv", ["demo_agents.py", "--check-config"]), patch("sys.stdout", new_callable=StringIO) as stdout:
+            demo_agents.main()
+        self.assertIn("설정 확인 완료", stdout.getvalue())
+        self.assertNotIn("test-only-key", stdout.getvalue())
+        self.constructor.return_value.invoke.assert_not_called()
+
+    def test_demo_llm_passes_created_model_to_both_agents(self):
+        import demo_agents
+        model = self.constructor.return_value
+        data = demo_agents.build_mock_input()
+        result = InvestmentEvaluator().invoke(data)
+        report = ReportGenerator().invoke(dict(data, investment_result=result))
+        with patch.object(demo_agents, "InvestmentEvaluator") as investment, \
+             patch.object(demo_agents, "ReportGenerator") as reports, \
+             patch.object(sys, "argv", ["demo_agents.py", "--llm"]), \
+             patch("sys.stdout", new_callable=StringIO):
+            investment.return_value.invoke.return_value = result
+            reports.return_value.invoke.return_value = report
+            demo_agents.main()
+            investment.assert_called_once_with(model=model)
+            reports.assert_called_once_with(model=model)
 
 
 if __name__ == "__main__":

@@ -13,13 +13,14 @@ from .evaluation_support import (
     AgentGenerationError, AgentResult, ContractModel, CRITERIA,
     CriterionEvaluation, Evidence, generate_json, validate_score,
     graph_identity, specialist_to_graph, resolve_model, require,
+    create_model_from_env,
 )
 
-# 실행 설정: 모델 객체를 넣거나 팩터리와 해당 모델명/옵션을 이 영역에 설정한다.
-# 제공자·모델명이 아직 합의되지 않아 임의 기본 모델은 생성하지 않는다.
+# 실행 설정: 기본 팩터리가 .env에서 OpenAI 키와 모델명을 읽는다.
+# 특정 모델명은 지정하지 않으며, 외부 주입 또는 아래 설정으로 변경할 수 있다.
 MODEL = None
-MODEL_FACTORY = None
-MODEL_SETTINGS = {}
+MODEL_FACTORY = create_model_from_env
+MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 모델명은 .env의 LLM_MODEL에서 읽는다.
 RETRIEVER = None
 
 # 프롬프트 수정 위치: prompts/tech_brief_prompt.py의 TECH_BRIEF_PROMPT.

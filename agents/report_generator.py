@@ -9,12 +9,13 @@ from .evaluation_support import (
     ReportAgentInput, ReportResult, collect_evidence, mapping, require, InputValidationError,
     AgentGenerationError, generate_json,
     InvestmentResult, graph_agent_input, graph_identity, resolve_model, unique,
+    create_model_from_env,
 )
 
 # 실행 설정: 외부 model 주입을 우선하며 모델명/옵션은 팩터리에 이 설정으로 전달한다.
 MODEL = None
-MODEL_FACTORY = None
-MODEL_SETTINGS = {}
+MODEL_FACTORY = create_model_from_env
+MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 모델명은 .env의 LLM_MODEL에서 읽는다.
 
 # 프롬프트 수정 위치: prompts/report_generator_prompt.py의 REPORT_GENERATOR_PROMPT.
 # 위 import로 직접 불러오므로 Agent 코드에 본문을 복사하지 않는다.

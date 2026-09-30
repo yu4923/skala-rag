@@ -7,6 +7,43 @@ from decimal import Decimal
 from math import isfinite
 from typing import Any, Literal
 import json
+import os
+from pathlib import Path
+
+
+# 실행 위치와 무관하게 skala-rag/.env만 읽는다. 실제 키는 코드/로그에 기록하지 않는다.
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+class ModelConfigurationError(ValueError):
+    """실제 LLM 실행에 필요한 환경 설정 누락 또는 불일치."""
+
+
+def create_model_from_env(*, model=None, temperature=None, timeout=60, max_retries=2, env_file=None):
+    """호출 시점에 .env를 읽어 ChatOpenAI 생성. 모델 생성만으로 API를 호출하지 않는다."""
+    try:
+        from dotenv import dotenv_values
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        raise ModelConfigurationError("python3 -m pip install -r requirements-agent.txt를 먼저 실행하세요") from None
+    values = dotenv_values(ENV_FILE if env_file is None else env_file)
+    # 셸/배포 환경이 .env보다 우선한다. 프로세스 전역 환경변수는 수정하지 않는다.
+    def setting(name):
+        return (os.environ.get(name, values.get(name)) or "").strip()
+
+    api_key = setting("OPENAI_API_KEY")
+    if not api_key:
+        raise ModelConfigurationError("OPENAI_API_KEY를 .env 또는 환경변수에 설정하세요")
+    primary, alias = setting("LLM_MODEL"), setting("OPENAI_MODEL")
+    if model is None and primary and alias and primary != alias:
+        raise ModelConfigurationError("LLM_MODEL과 OPENAI_MODEL이 다릅니다. 하나만 설정하거나 같은 값으로 맞추세요")
+    selected = model if model is not None else primary or alias
+    if not isinstance(selected, str) or not selected.strip():
+        raise ModelConfigurationError("LLM_MODEL(또는 OPENAI_MODEL)에 사용할 모델명을 설정하세요")
+    options = {"model": selected.strip(), "api_key": api_key, "timeout": timeout, "max_retries": max_retries}
+    if temperature is not None:
+        options["temperature"] = temperature
+    return ChatOpenAI(**options)
 
 
 class AgentGenerationError(RuntimeError):
