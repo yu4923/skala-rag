@@ -4,6 +4,8 @@
 
 ## Overview
 
+제품·기술 요약 Agent는 `agents/tech_brief.py`의 `ProductTechAgent`로 구현되어 있습니다. 실제 Retriever와 모델은 외부에서 주입하며, 공통 결과를 반환합니다. 호출 방법·어댑터 교체 위치·Mock 검증 범위는 [제품·기술 Agent 연동 안내](tests/README.md#제품기술-요약-agent)를 참고하세요.
+
 ### 종합 투자 판단·보고서 Agent 실행
 
 Python 3.10 이상이 필요합니다. 공통 모델에 필요한 Pydantic은 `requirements-agent.txt`로 설치합니다. Mock 실행에는 API 키가 필요하지 않습니다. 실제 LLM 실행은 호출하는 애플리케이션에서 모델과 인증을 설정해야 합니다.

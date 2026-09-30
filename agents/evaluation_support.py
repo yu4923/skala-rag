@@ -162,6 +162,129 @@ class Serializable:
         return asdict(self)
 
 
+# Graph 호출 어댑터 공통 변환. Graph/StateGraph를 import하지 않아 단독 실행을 유지한다.
+GRAPH_ROLES = {"founder": "founder_insight", "market": "market_scout", "technology": "tech_brief"}
+
+
+def graph_identity(state):
+    company = state["company_context"]["company_name"]
+    nonempty(company, "company_name")
+    count = state["retry_state"]["retry_count"]
+    require(type(count) is int and count >= 0, "retry_count는 0 이상의 정수여야 합니다")
+    return company, count + 1
+
+
+def resolve_model(model, default_model, factory, settings):
+    """모델을 State에 넣지 않고 모듈 상단 설정 또는 명시적 인자로 전달한다."""
+    if model is not None:
+        return model
+    if default_model is not None:
+        return default_model
+    return factory(**settings) if factory is not None else None
+
+
+def specialist_from_graph(value, role, company, round_no):
+    """Graph scores/evidence를 기존 Agent 입력으로 변환. 누락 점수를 채우지 않는다."""
+    result = mapping(value, role)
+    require(result.get("company_name") == company and result.get("round_no") == round_no,
+            f"{role}: 기업 또는 평가 회차 불일치")
+    require(result.get("agent") == GRAPH_ROLES[role], f"{role}: Agent 이름 불일치")
+    require(result.get("status") in ("success", "partial", "error"), "평가 상태 오류")
+    evidence = []
+    for item in result.get("evidence", []):
+        source = item.get("source")
+        nonempty(source, "source")
+        require(item.get("source_type") in ("pdf", "web", "input"), "출처 유형 오류")
+        evidence.append({
+            "evidence_id": item["evidence_id"], "claim": item["claim"],
+            "source_title": item.get("source_title") or source,
+            "source_url": item.get("source_url") or (source if item["source_type"] == "web" else None),
+            "page": item.get("page"),
+        })
+    evaluations = []
+    for item in result.get("scores", []):
+        name = item["criterion"]
+        require(name in CRITERIA[role] and item.get("max_score") == CRITERIA[role][name],
+                "Graph와 Agent의 항목 또는 배점이 다릅니다")
+        evaluations.append({key: item[key] for key in ("criterion", "score", "reason", "evidence_ids")})
+    missing = list(result.get("missing_items", []))
+    if result["status"] != "success":
+        missing.append(f"{GRAPH_ROLES[role]}: 평가 미완료")
+    normalized = validate_specialist({
+        "agent_name": role, "company_name": company, "evaluations": evaluations,
+        "evidence": evidence, "risks": result.get("risks", []),
+        "missing_information": unique(missing), "confidence": "low" if missing else "medium",
+        "needs_more_information": bool(missing),
+    }, role, company)
+    if "score" in result:
+        validate_score(result["score"], sum(CRITERIA[role].values()), "Graph 담당 합계")
+        require(all(item["score"] is not None for item in evaluations), "합계가 있지만 항목 점수가 미정입니다")
+        expected = float(sum(Decimal(str(item["score"])) for item in evaluations))
+        require(result["score"] == expected, "Graph 담당 합계 불일치")
+    if result["status"] == "success":
+        require({item["criterion"] for item in evaluations} == set(CRITERIA[role])
+                and all(item["score"] is not None and item["evidence_ids"] for item in evaluations)
+                and not missing, "완료된 평가의 항목·점수·근거가 부족합니다")
+    return normalized
+
+
+def graph_agent_input(state, *, allow_missing=False):
+    company, round_no = graph_identity(state)
+    values = {"company_name": company, "company_context": deepcopy(state["company_context"])}
+    for name, role in (("founder_result", "founder"), ("market_result", "market"), ("tech_result", "technology")):
+        if name not in state and allow_missing:
+            values[name] = {"agent_name": role, "company_name": company, "evaluations": [],
+                            "evidence": [], "risks": [], "confidence": "low",
+                            "missing_information": [f"{name}: 현재 회차 결과 없음"], "needs_more_information": True}
+        else:
+            require(name in state, f"필수 Agent 결과 누락: {name}")
+            values[name] = specialist_from_graph(state[name], role, company, round_no)
+    review = deepcopy(state.get("evidence_review", {}))
+    if review:
+        require(review.get("company_name") == company and review.get("round_no") == round_no,
+                "근거 검토의 기업 또는 회차 불일치")
+    values["evidence_review"] = review
+    values["evaluation_settings"] = deepcopy(state.get("evaluation_settings", {}))
+    return values
+
+
+def specialist_to_graph(result, state, *, sources=None):
+    """공통 결과를 Graph 전문 Agent 계약으로 변환. None 점수는 partial의 미완료 항목이다."""
+    company, round_no = graph_identity(state)
+    value = mapping(result, "specialist result")
+    value = validate_specialist(value, value["agent_name"], company)
+    role = value["agent_name"]
+    missing = list(value["missing_information"])
+    scores = []
+    for item in value["evaluations"]:
+        if item["score"] is None or not item["evidence_ids"]:
+            missing.append(f"{item['criterion']}: 점수 또는 근거 미확정")
+        else:
+            scores.append({**item, "max_score": CRITERIA[role][item["criterion"]]})
+    for name in set(CRITERIA[role]) - {item["criterion"] for item in value["evaluations"]}:
+        missing.append(f"{name}: 평가 누락")
+    if value["needs_more_information"] and not missing:
+        missing.append("추가 정보 확인 필요")
+    evidence = []
+    for item in value["evidence"]:
+        meta = (sources or {}).get(item["evidence_id"], {})
+        kind = meta.get("source_type") or ("pdf" if item.get("page") else "web" if item.get("source_url") else "input")
+        record = {"evidence_id": item["evidence_id"], "claim": item["claim"], "excerpt": item["claim"],
+                  "source_type": kind, "source": meta.get("source") or item.get("source_url") or item["source_title"],
+                  "source_title": item["source_title"], "source_url": item.get("source_url")}
+        if item.get("page") is not None:
+            record["page"] = item["page"]
+        evidence.append(record)
+    output = {"company_name": company, "round_no": round_no, "agent": GRAPH_ROLES[role],
+              "status": "partial" if missing else "success",
+              "summary": "\n".join(item["reason"] for item in value["evaluations"]) or "평가 근거 부족",
+              "evidence": evidence, "missing_items": unique(missing), "scores": scores,
+              "risks": value["risks"]}
+    if len(scores) == len(CRITERIA[role]):
+        output["score"] = float(sum(Decimal(str(item["score"])) for item in scores))
+    return output
+
+
 @dataclass
 class InvestmentAgentInput(Serializable):
     company_name: str
@@ -208,7 +331,7 @@ class InvestmentAgentInput(Serializable):
 class InvestmentResult(Serializable):
     company_name: str
     total_score: float | None = None
-    decision: Literal["first_review_pass", "additional_research", "hold", "pending"] = "pending"
+    decision: Literal["first_review_pass", "additional_research", "hold", "pending", "recommend", "reject"] = "pending"
     key_reasons: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
     missing_information: list[str] = field(default_factory=list)
@@ -217,13 +340,13 @@ class InvestmentResult(Serializable):
     def __post_init__(self):
         nonempty(self.company_name, "company_name")
         validate_score(self.total_score, 100, "total_score")
-        require(self.decision in ("first_review_pass", "additional_research", "hold", "pending"), "decision 오류")
+        require(self.decision in ("first_review_pass", "additional_research", "hold", "pending", "recommend", "reject"), "decision 오류")
         for key in ("key_reasons", "risks", "missing_information"):
             strings(getattr(self, key), key)
         require(type(self.needs_more_information) is bool, "needs_more_information 오류")
         require(not self.missing_information or self.needs_more_information,
                 "부족 정보가 있으면 needs_more_information=True여야 합니다")
-        require(not self.needs_more_information or self.decision in ("pending", "additional_research"),
+        require(not self.needs_more_information or self.decision in ("pending", "additional_research", "hold"),
                 "정보 부족 상태에서 최종 투자 판단을 내릴 수 없습니다")
 
 
@@ -239,7 +362,8 @@ class ReportAgentInput(InvestmentAgentInput):
         require(self.investment_result is not None, "필수 투자 판단 결과 누락")
         self.investment_result = InvestmentResult(**mapping(self.investment_result, "investment_result"))
         require(self.investment_result.company_name == self.company_name, "투자 판단의 company_name 불일치")
-        require(self.investment_result.total_score == calculate_total(self.results),
+        require(self.investment_result.total_score == calculate_total(self.results)
+                or (self.investment_result.total_score is None and self.investment_result.needs_more_information),
                 "투자 판단 총점과 전문 Agent 점수 합계가 다릅니다")
         if self.evaluation_status is None:
             self.evaluation_status = self.investment_result.decision
