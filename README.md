@@ -141,14 +141,14 @@ python app.py --trace
 인덱스가 이미 있으면 `python rag/tech_ingest.py`를 생략합니다. Mock 데모는 `python demo_agents.py`, 테스트는 `python -m unittest discover -s tests -v`로 실행합니다. 현재 시장 RAG 연결은 개발 중입니다.
 
 ## Contributors 
-강서현 - Prompt
+강서현 - Prompt (Agent별 Prompt 템플릿 작성)
 
-김가은 - Agent
+김가은 - Agent (종합 투자 판단, 보고서 작성, 제품 기술 요약)
 
-김태완 - Graph
+김태완 - Graph (State·Node·Edge 설계, Agent 연동, 평가 결과 검증·통합, 조건부 분기 및 재시도 흐름 구현)
 
-심지용 - RAG
+심지용 - RAG (시장성 검증 Agent에 필요한 RAG 설계)
 
-엄진용 - Agent
+엄진용 - Agent (창업자 검증, 시장성 검증)
 
-유선일 - RAG
+유선일 - RAG (제품.기술 요약 Agent에 필요한 RAG 설계)
