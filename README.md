@@ -26,12 +26,12 @@
 |---|---|
 | Language | Python |
 | Framework | LangGraph |
-| LLM / Generator | {GPT version} |
-| LLM / Judge | {GPT version} |
-| Retrieval | {VectorDB} — Hit@3: {측정값}, MRR@10: {측정값} |
+| LLM / Generator | gpt-4o-mini |
+| Judge | Rule-base |
+| Retrieval | Faiss — Hit@3: {측정값}, MRR@10: {측정값} |
 | Embedding | `intfloat/multilingual-e5-small` |
 | Web Search | {웹 검색 Tool 또는 API} |
-| PDF Processing | {PDF 로더 및 텍스트 추출 라이브러리} |
+| PDF Processing | pymupdf |
 | Calculation | {계산 Tool} |
 | State Schema | TypedDict, Annotated, Pydantic 기반 출력 검증 |
 
