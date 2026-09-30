@@ -142,8 +142,13 @@ python app.py --trace
 
 ## Contributors 
 강서현 - Prompt
+
 김가은 - Agent
+
 김태완 - Graph
+
 심지용 - RAG
+
 엄진용 - Agent
+
 유선일 - RAG
