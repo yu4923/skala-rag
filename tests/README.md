@@ -1,5 +1,25 @@
 # 종합 투자 판단·보고서 Agent 연동 안내
 
+## LLM 호출 연결
+
+두 Agent 모두 `model`을 주입하면 파일 프롬프트와 검증된 입력을 실제 `model.invoke(messages)`에 전달한다. `messages`는 `role`/`content` 딕셔너리 목록이다. 모델은 문자열 또는 문자열 `content`를 가진 응답을 반환해야 한다. 제공자·모델명·API 키 설정은 호출하는 애플리케이션에서 관리한다.
+
+```python
+# model: 애플리케이션에서 설정한 채팅 모델 인스턴스
+investment = InvestmentEvaluator(model=model).invoke(investment_input)
+report = ReportGenerator(model=model).invoke(ReportAgentInput(
+    **investment_input.model_dump(), investment_result=investment,
+))
+```
+
+선택 입력 `company_context`, `evidence_review`, `criteria_met`, `evaluation_settings`를 지원한다. 보고서의 `evaluation_status`는 생략하면 기존 decision을 사용하고, 전달하면 decision과 일치해야 한다. `criteria_met`은 설명용으로 전달하며 통과·보류 임계값이나 decision 매핑을 새로 정하지 않는다.
+
+투자 Agent는 생성한 설명을 `key_reasons`에 추가한다. 보고서 Agent는 원본 프롬프트의 SUMMARY 및 1~4장을 JSON 필드에 대응시키는 전송 지시를 추가하고 실제 생성 본문을 반환한다. 총점·decision 메타데이터, JSON 필드, 본문 인용 ID와 사용 근거 목록의 일치를 검증한다. 실패는 `AgentGenerationError`로 전달하며 조용히 Mock 결과로 바꾸지 않는다. 자연어 본문에 포함된 모든 숫자·판단의 의미적 일치와 사실성을 자동 보증하지는 않는다. 출력 페이지 수 검증도 별도다.
+
+모델을 생략한 기존 `demo_agents.py`는 오프라인 템플릿 실행이다. `tests/test_person2_agents.py`의 `LLMTests`는 Fake 모델로 실제 호출 경계와 응답 검증을 검사한다. 공통 LLM 호출 함수는 기존 `agents/evaluation_support.py`에 포함한다. 유료 API 호출은 수행하지 않았다.
+
+아래의 과거 검토 기록 중 'LLM 미연결' 설명은 위 구현 이전 상태이며, 현재 실행 방법은 이 절을 따른다.
+
 저장소 루트(`skala-rag`)에서 실행:
 
 ```sh
@@ -8,7 +28,7 @@ python3 demo_agents.py --needs-more-information
 python3 -m unittest discover -s tests -v
 ```
 
-Python 3.10 이상이 필요하다. Windows에서는 `python3` 대신 `py -3`를 사용할 수 있다. 테스트 데이터는 실제 기업 평가가 아닌 연동 검증용 Mock이다. 외부 API, 패키지 설치, API 키가 필요하지 않다. `requirements-agent.txt`는 이 실행 범위에 추가 패키지가 없음을 명시한다. `demo_agents.py`는 테스트 모듈에 의존하지 않는 독립 실행 예제이며, JSON 결과를 터미널에 출력한다.
+Python 3.10 이상이 필요하다. 실행 전 `python3 -m pip install -r requirements-agent.txt`로 공통 모델의 Pydantic 의존성을 설치한다. Windows에서는 `python3` 대신 `py -3`를 사용할 수 있다. 테스트 데이터는 실제 기업 평가가 아닌 연동 검증용 Mock이며 외부 API와 API 키가 필요하지 않다. `demo_agents.py`는 테스트 모듈에 의존하지 않는 독립 실행 예제이며, JSON 결과를 터미널에 출력한다.
 
 ## 공개 인터페이스
 

@@ -1,14 +1,16 @@
 """모든 기업·점수·근거는 코드 검증 전용 Mock이며 실제 평가 자료가 아니다."""
 
 from copy import deepcopy
+import json
 import unittest
 
 from agents.evaluation_support import (
     CRITERIA, InputValidationError, InvestmentAgentInput, InvestmentResult,
     ReportAgentInput,
+    AgentGenerationError,
 )
-from agents.investment_evaluator import InvestmentEvaluator
-from agents.report_generator import ReportGenerator
+from agents.investment_evaluator import InvestmentEvaluator, INVESTMENT_SYSTEM_PROMPT
+from agents.report_generator import ReportGenerator, REPORT_SYSTEM_PROMPT
 
 
 def mock_input():
@@ -177,6 +179,64 @@ class Person2Tests(unittest.TestCase):
         data.founder_result["evaluations"][0]["score"] = -1
         with self.assertRaises(InputValidationError):
             self.agent.invoke(data)
+
+
+class FakeModel:
+    def __init__(self, response):
+        self.response = response
+        self.messages = None
+
+    def invoke(self, messages):
+        self.messages = messages
+        return self.response
+
+
+class LLMTests(unittest.TestCase):
+    def setUp(self):
+        self.data = mock_input()
+        self.investment = InvestmentEvaluator().invoke(self.data)
+        self.output = dict(summary="테스트 요약", business_overview="테스트 사업",
+                           market_analysis="테스트 시장 [근거:market-test-0]",
+                           product_technology_and_team="테스트 기술", investment_review="판단 pending, 100점",
+                           total_score=100.0, decision="pending", used_evidence_ids=["market-test-0"])
+
+    def test_investment_calls_model_with_prompt_and_context(self):
+        model = FakeModel("입력 근거에 대한 테스트 설명")
+        self.data.update(criteria_met=None, evidence_review={"missing": ["검토 필요"]})
+        result = InvestmentEvaluator(model=model).invoke(self.data)
+        self.assertTrue(model.messages[0]["content"].startswith(INVESTMENT_SYSTEM_PROMPT))
+        payload = json.loads(model.messages[1]["content"])
+        self.assertEqual(payload["evidence_review"], self.data["evidence_review"])
+        self.assertEqual(payload["total_score"], 100)
+        self.assertIn(model.response, result.key_reasons)
+        self.assertEqual(result.decision, "pending")
+
+    def test_report_uses_generated_text_and_input_references(self):
+        model = FakeModel(json.dumps(self.output))
+        report = ReportGenerator(model=model).invoke(dict(self.data, investment_result=self.investment))
+        self.assertEqual(report.summary, "테스트 요약")
+        self.assertEqual(len(report.references), 1)
+        self.assertTrue(model.messages[0]["content"].startswith(REPORT_SYSTEM_PROMPT))
+        self.assertEqual(json.loads(model.messages[1]["content"])["evaluation_status"], "pending")
+
+    def test_invalid_model_outputs_fail(self):
+        for patch in ({"total_score": 50}, {"decision": "hold"},
+                      {"used_evidence_ids": []},
+                      {"used_evidence_ids": ["unknown"], "market_analysis": "[근거:unknown]"},
+                      {"summary": ""}):
+            with self.subTest(patch=patch):
+                model = FakeModel(json.dumps(dict(self.output, **patch)))
+                with self.assertRaises(AgentGenerationError):
+                    ReportGenerator(model=model).invoke(dict(self.data, investment_result=self.investment))
+
+    def test_invalid_json_and_model_failure(self):
+        with self.assertRaises(AgentGenerationError):
+            ReportGenerator(model=FakeModel("not JSON")).invoke(dict(self.data, investment_result=self.investment))
+        class BrokenModel:
+            def invoke(self, messages):
+                raise RuntimeError("test failure")
+        with self.assertRaises(AgentGenerationError):
+            InvestmentEvaluator(model=BrokenModel()).invoke(self.data)
 
 
 if __name__ == "__main__":

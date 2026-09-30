@@ -1,4 +1,7 @@
 # Python 3.10+ required.
 # InvestmentEvaluator, ReportGenerator, demo_agents.py and their tests
-# use only the Python standard library. No pip packages or API keys required.
+# require Pydantic for the shared specialist models. Mock tests need no API keys.
+pydantic>=2,<3
 # This is not a dependency list for the future full Graph/RAG/LLM application.
+# Live LLM calls require a caller-supplied model implementing invoke(messages).
+# Install/configure the selected provider's packages in the calling application.
