@@ -9,8 +9,8 @@ Public API:
     initialize_market_rag()
     rag_search(query: str) -> list[dict]
 
-The on-disk FAISS index is a disposable cache under ``market_index``.  It is
-rebuilt automatically when a source PDF or an indexing setting changes.
+The on-disk FAISS index is a disposable cache under ``rag/market_index``.
+It is rebuilt automatically when a source PDF or an indexing setting changes.
 """
 
 from __future__ import annotations

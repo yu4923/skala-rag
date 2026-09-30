@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 # agents/ 안에서 python founder_insight.py로 실행한 경우에도 패키지 경로를 설정한다.
@@ -168,6 +169,8 @@ class FounderInsightAgent:
                         reason = f"근거 필드 검증 실패 ({', '.join(fields)})"
                     elif isinstance(exc, ValueError):
                         reason = str(exc)
+                    elif isinstance(exc, HTTPError):
+                        reason = f"HTTP 상태 {exc.code}"
                     else:
                         reason = "검색 요청 또는 응답 처리 실패"
                     logger.warning("founder.search_failed: %s: %s", type(exc).__name__, reason)
