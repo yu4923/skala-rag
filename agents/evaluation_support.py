@@ -1,4 +1,4 @@
-"""사람2 전용 입출력 경계와 순수 함수. 공통 AgentResult 모델의 소유권은 사람1에 있다."""
+"""investment_evaluator.py와 report_generator.py의 입출력 모델 및 공통 검증 함수."""
 
 from collections.abc import Mapping
 from copy import deepcopy
@@ -134,14 +134,16 @@ class Serializable:
 class InvestmentAgentInput(Serializable):
     company_name: str
     founder_result: Any = None
-    # RAG 담당자에게 받을 시장성 AgentResult (agent_name="market").
+    # agents/market_scout.py에서 받을 시장성 AgentResult (agent_name="market").
     # evaluations에 시장 규모·성장 가능성 / 실제 고객 수요 평가와 점수를 담는다.
     market_result: Any = None
-    # RAG 담당자에게 받을 제품·기술 AgentResult (agent_name="technology").
+    # agents/tech_brief.py에서 받을 제품·기술 AgentResult (agent_name="technology").
     # evaluations에 제품·기술 정보의 구체성 / 제품 차별성·성능 정보의 명확성을 담는다.
     tech_result: Any = None
 
-    # TODO(RAG/공통 모델 연동): 사람1 및 RAG 담당자의 실제 AgentResult와 필드를 맞춘다.
+    # TODO(RAG/공통 모델 연동): agents/founder_insight.py, agents/market_scout.py,
+    # agents/tech_brief.py의 출력 계약 확정 후 이 파일의 validate_specialist()와
+    # InvestmentAgentInput을 수정한다. 공통 AgentResult 정의 파일의 경로는 아직 미정이다.
     # 두 RAG 결과 모두 evidence와 evaluations[].evidence_ids를 연결해야 한다.
     # PDF 파일명은 source_title, 페이지는 page로 받는 계약을 확인하고,
     # 검색 실패·자료 부족은 missing_information / needs_more_information으로 전달받는다.

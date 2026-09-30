@@ -1,4 +1,4 @@
-# 사람2 Agent 연동 안내
+# 종합 투자 판단·보고서 Agent 연동 안내
 
 저장소 루트(`skala-rag`)에서 실행:
 
@@ -30,7 +30,7 @@ investment_data = investment.model_dump()
 report_data = report.model_dump()
 ```
 
-`invoke()`에는 같은 필드의 딕셔너리도 전달할 수 있다. 전문 결과는 전달 문서의 `AgentResult` 필드를 가진 딕셔너리 또는 `model_dump()`를 지원하는 모델로 받는다. 기존 의존성 설정이 없어 이번 입출력 모델은 Python 표준 dataclass로 구현했다. Pydantic 모델을 새로 정의하거나 사람1의 공통 모델을 대신 구현하지 않았다. `agents/evaluation_support.py`는 사람2의 검증 어댑터와 순수 함수를 담는다.
+`invoke()`에는 같은 필드의 딕셔너리도 전달할 수 있다. 전문 결과는 전달 문서의 `AgentResult` 필드를 가진 딕셔너리 또는 `model_dump()`를 지원하는 모델로 받는다. 기존 의존성 설정이 없어 이번 입출력 모델은 Python 표준 dataclass로 구현했다. 공통 `AgentResult` 모델은 아직 정의되지 않았으며 정의 파일의 경로도 미정이다. `agents/evaluation_support.py`는 `agents/investment_evaluator.py`와 `agents/report_generator.py`에서 사용하는 입출력 모델, 검증 어댑터, 순수 함수를 담는다.
 
 ## 검증 및 점수 규칙
 
@@ -49,4 +49,14 @@ report_data = report.model_dump()
 
 사업 개요 전용 필드가 현재 공통 입력에 없어 해당 장에는 기업명과 추가 확인 안내를 표시한다. 최종 프롬프트/입력 계약 확정 후 핵심 사업·고객·수익 구조를 근거와 연결해야 한다. SUMMARY는 기업명·총점·판단만 표시한다. 페이지 배치나 5페이지 파일 출력은 제공하지 않는다.
 
-사람1/RAG 담당자와 공통 모델 및 항목명을 맞추고, Graph 담당자와 오류 처리 및 State 필드를 정해야 한다. 공통 모델 확정 후 이 어댑터를 해당 모델로 교체할 수 있다.
+연동 자료를 받으면 아래 파일과 위치를 수정한다. 경로는 저장소 루트 기준이다.
+
+| 받은 자료 | 수정 파일 및 위치 |
+|---|---|
+| 최종 종합 투자 판단 프롬프트 | `agents/investment_evaluator.py`의 `INVESTMENT_SYSTEM_PROMPT`, `InvestmentEvaluator.invoke()` |
+| `prompts/report_generator_prompt.py`의 확정된 보고서 프롬프트 | `agents/report_generator.py`의 `REPORT_SYSTEM_PROMPT`, `ReportGenerator.invoke()` |
+| `agents/founder_insight.py`, `agents/market_scout.py`, `agents/tech_brief.py`의 실제 출력 및 공통 모델 | `agents/evaluation_support.py`의 `validate_specialist()`, `InvestmentAgentInput` (공통 모델 정의 경로는 미정) |
+| RAG 결과의 사업 개요 필드 및 근거 ID | `agents/evaluation_support.py`의 입력 모델, `agents/report_generator.py`의 `business_overview` |
+| Graph/State 연결 계약 | README에 예정된 `graph.py`, `state.py`에서 입력 전달·결과 저장·`InputValidationError` 처리 연결 |
+
+현재 Mock 검증은 `tests/test_person2_agents.py`에 있다. 실제 출력 계약이 바뀌면 해당 테스트의 `mock_input()`과 연동 검증도 함께 수정한다.

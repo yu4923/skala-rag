@@ -1,14 +1,15 @@
-"""외부 검색/LLM 없이 전문 평가를 통합하는 사람2 Agent."""
+"""외부 검색/LLM 없이 전문 평가를 통합하는 종합 투자 판단 Agent."""
 
 from .evaluation_support import (
     CRITERIA, InvestmentAgentInput, InvestmentResult, calculate_total,
     collect_evidence, mapping, unique,
 )
 
-# TODO(프롬프트 연동): 프롬프트 담당자의 최종 종합 투자 판단 프롬프트를 아래에 붙여넣는다.
+# TODO(프롬프트 연동): 최종 종합 투자 판단 프롬프트 수령 후
+# agents/investment_evaluator.py의 INVESTMENT_SYSTEM_PROMPT를 수정한다.
 # 현재 이 상수는 사용하지 않는다. LLM/API 확정 후 호출부를 별도로 연결해야 한다.
 INVESTMENT_SYSTEM_PROMPT = """
-TODO: 프롬프트 담당자가 작성한 최종 프롬프트를 여기에 붙여넣는다.
+TODO: 최종 종합 투자 판단 프롬프트를 여기에 붙여넣는다.
 """
 
 
@@ -40,7 +41,8 @@ class InvestmentEvaluator:
             if result["needs_more_information"] and not result["missing_information"]:
                 missing.append(f"{role}: 추가 정보 요청의 구체적인 내용 확인 필요")
         needs_more = bool(needs_more or missing)
-        # TODO(프롬프트/LLM 연동): 통합된 평가·근거·위험·부족 정보와 계산된 총점을
+        # TODO(프롬프트/LLM 연동): 이 파일의 InvestmentEvaluator.invoke()를 수정해
+        # 통합된 평가·근거·위험·부족 정보와 계산된 총점을
         # 최종 프롬프트에 전달하는 호출부를 연결한다. 합산은 calculate_total()에 유지한다.
         # 통과·보류 기준도 팀에서 받아야 하며, 프롬프트만 추가해서 임계값을 만들지 않는다.
         reasons.append("투자 통과·보류 기준 미확정으로 최종 판단 대기")
