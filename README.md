@@ -4,34 +4,71 @@
 
 ## Overview
 
-제품·기술 요약 Agent는 `agents/tech_brief.py`의 `ProductTechAgent`로 구현되어 있습니다. 실제 Retriever와 모델은 외부에서 주입하며, 공통 결과를 반환합니다. 호출 방법·어댑터 교체 위치·Mock 검증 범위는 [제품·기술 Agent 연동 안내](tests/README.md#제품기술-요약-agent)를 참고하세요.
+### 가상환경에서 전체 앱 실행
+
+Python 3.10 이상이 필요합니다. 저장소 루트에서 다음 순서로 실행합니다. `requirements.txt`는 Graph, Agent, 기술 PDF RAG에 필요한 패키지를 함께 설치합니다. `requirement.txt`도 같은 목록을 가리킵니다.
+
+macOS / Linux:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Windows PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+루트의 `.env`에 OpenAI·Tavily API 키와 Agent 모델명, 평가 설정을 입력합니다. `.env`는 Git에 포함되지 않습니다. 기술 PDF RAG는 최초 실행 전에 인덱스를 만들어야 합니다. 제공된 PDF가 `tech_data/tech-10-startups-50pages-2026-09-30.pdf`에 있는지 확인한 뒤 실행하세요. 임베딩 모델은 최초 실행 때 내려받으며, 생성한 인덱스는 `tech_data/vector_index_product/`에 저장됩니다.
+
+```sh
+python rag/tech_ingest.py
+python app.py
+# LangSmith 추적을 이번 실행에만 켜기
+python app.py --trace
+```
+
+`.env`의 `LANGSMITH_TRACING`이 기본 추적 설정입니다. `--trace` 또는 `--no-trace`로 이번 실행에서만 바꿀 수 있습니다. 인덱스가 이미 있으면 다시 구축하지 않고 `python app.py`부터 실행합니다. 실행이 끝나면 `deactivate`로 가상환경을 종료합니다.
+
+현재 시장 RAG 구성과 Agent 간 연결은 개발 중이므로, 의존성을 설치하고 기술 인덱스를 만들더라도 전체 평가가 완성된 보고서를 생성하지 못할 수 있습니다. 아래 Mock 데모는 외부 검색 없이 종합 판단·보고서 Agent를 확인할 때 사용합니다.
+
+제품·기술 요약 Agent는 `agents/tech_brief.py`의 `ProductTechAgent`로 구현되어 있습니다. 실제 Retriever와 모델은 외부에서 주입하며, 공통 결과를 반환합니다. 기술 검색 데이터와 인덱스 구성은 [제품·기술 RAG 연동 안내](docs/integration/product-rag-handoff.md)를 참고하세요.
 
 ### 종합 투자 판단·보고서 Agent 실행
 
-Python 3.10 이상이 필요합니다. Pydantic과 실제 모델 연결에 필요한 패키지는 `requirements-agent.txt`로 설치합니다. Mock 실행에는 API 키가 필요하지 않습니다.
+Mock 데모만 실행할 때는 위에서 만든 가상환경에서 `requirements-agent.txt`의 가벼운 의존성만 설치할 수 있습니다. Mock 실행에는 API 키가 필요하지 않습니다.
 
 처음 받는 경우:
 
 ```sh
-git clone --branch agent https://github.com/yu4923/skala-rag.git
+git clone https://github.com/yu4923/skala-rag.git
 cd skala-rag
-python3 -m pip install -r requirements-agent.txt
-python3 demo_agents.py
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-agent.txt
+python demo_agents.py
 ```
 
-이미 저장소가 있다면 로컬 작업을 커밋하거나 보관한 뒤 `git switch agent`, `git pull --no-rebase origin agent`로 갱신하고 실행합니다. Windows에서는 `python3` 대신 `py -3`를 사용할 수 있습니다.
+이미 저장소가 있다면 가상환경을 활성화한 뒤 실행합니다. Windows에서는 앞의 PowerShell 가상환경 명령을 사용하세요.
 
 ```sh
 # 자료 부족 시나리오 실행
-python3 demo_agents.py --needs-more-information
+python demo_agents.py --needs-more-information
 
 # 단위 테스트 실행
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
 실행 결과는 터미널에 JSON으로 출력됩니다. 기본 Mock은 총점 `100.0`, 판단 `pending`이며, 자료 부족 Mock은 총점 `null`, 판단 `additional_research`입니다. 두 경우 모두 실제 기업 평가가 아닙니다. 현재 실행 범위는 전문 Agent의 Mock 결과를 받아 종합 판단과 템플릿 보고서를 생성하는 단계이며, LLM·웹 검색·RAG·전체 Graph는 실행하지 않습니다.
 
-`agents/`와 `prompts/`를 포함한 저장소 전체를 받아야 합니다. 공통 보조 코드는 `agents/evaluation_support.py`, 보고서 프롬프트는 `prompts/report_generator_prompt.py`에 있습니다. 다른 프로젝트에서 호출하는 방법과 미연결 항목은 [연동 안내](tests/README.md)를 참고하세요.
+`agents/`와 `prompts/`를 포함한 저장소 전체를 받아야 합니다. 공통 보조 코드는 `agents/evaluation_support.py`, 보고서 프롬프트는 `prompts/report_generator_prompt.py`에 있습니다.
 
 ### 실제 LLM 연결
 
@@ -45,10 +82,10 @@ LLM_MODEL=팀에서_정한_모델명
 앞서 안내한 `OPENAI_MODEL`도 `LLM_MODEL`의 대체 이름으로 지원합니다. 두 값이 다르면 오류가 나므로 하나만 사용하세요. `OPENAI_API_KEY`를 환경변수로 전달하는 방식은 [OpenAI 공식 안내](https://developers.openai.com/api/docs/quickstart)를 따릅니다. `.env`는 Git 추적 대상이 아닙니다.
 
 ```sh
-python3 -m pip install -r requirements-agent.txt
-python3 demo_agents.py --check-config
+python -m pip install -r requirements-agent.txt
+python demo_agents.py --check-config
 # 실제 LLM 두 번 호출: API 비용 발생, 기업 입력은 여전히 Mock
-python3 demo_agents.py --llm
+python demo_agents.py --llm
 ```
 
 `--check-config`는 설정을 읽고 모델을 생성하지만 API를 호출하지 않으므로 키 유효성·모델 접근 권한까지 확인하는 명령은 아닙니다. `--llm`은 종합 투자 판단과 보고서 Agent를 실제 호출합니다. 옵션 없이 실행하면 기존 오프라인 Mock입니다.
