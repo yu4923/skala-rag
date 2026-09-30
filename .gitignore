@@ -24,4 +24,8 @@ uv.lock
 
 # 로컬 모델과 생성 인덱스는 PDF에서 재생성한다.
 .cache/
+rag/indexes/*
+!rag/indexes/market/
+rag/indexes/market/*
+!rag/indexes/market/.gitignore
 tech_data/vector_index*/

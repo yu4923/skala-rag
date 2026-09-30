@@ -12,9 +12,9 @@ if __package__:
 else:
     from tech_embeddings import LocalE5Embeddings
 
-ROOT = Path(__file__).resolve().parents[1]
-PDF = ROOT / "tech_data/tech-10-startups-50pages-2026-09-30.pdf"
-INDEX = ROOT / "tech_data/vector_index_product"
+ROOT = Path(__file__).resolve().parents[2]
+PDF = ROOT / "rag/data/tech/tech-10-startups-50pages-2026-09-30.pdf"
+INDEX = ROOT / "rag/indexes/product"
 SOURCE_TITLE = "에너지 스타트업 기술 자료집"
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
@@ -80,10 +80,21 @@ def build_vector_db(output_dir=INDEX):
     chunks = split_documents(docs)
     print(f"[2/3] {len(chunks)}개 청크 생성 (최대 {CHUNK_SIZE}자)", flush=True)
     embeddings = LocalE5Embeddings()
+    # E5 모델은 로딩 비용이 크므로 전체 청크를 한 번에 임베딩한다.
+    vectors = embeddings.embed_documents([doc.page_content for doc in chunks])
     counts = {}
     for code, name in COMPANIES.items():
-        company_chunks = [doc for doc in chunks if doc.metadata["company_id"] == code]
-        vectorstore = FAISS.from_documents(company_chunks, embeddings)
+        company_items = [
+            (doc, vector)
+            for doc, vector in zip(chunks, vectors)
+            if doc.metadata["company_id"] == code
+        ]
+        company_chunks = [doc for doc, _vector in company_items]
+        vectorstore = FAISS.from_embeddings(
+            [(doc.page_content, vector) for doc, vector in company_items],
+            embeddings,
+            metadatas=[doc.metadata for doc in company_chunks],
+        )
         vectorstore.save_local(str(output_dir / code))
         counts[code] = len(company_chunks)
         print(f"[3/3] {name}: {len(company_chunks)}개 벡터 저장", flush=True)

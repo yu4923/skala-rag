@@ -102,7 +102,11 @@ flowchart TD
 ## Directory Structure
 
 ```text
-├── data/                  # 문서 풀
+├── rag/                   # RAG 코드·원본 PDF·생성 인덱스
+│   ├── data/              # 시장·기술 PDF를 용도별로 분리
+│   ├── indexes/           # PDF에서 재생성하는 로컬 캐시
+│   ├── tech_rag/          # 기술 문서 인덱싱·검색 패키지
+│   └── market_rag/        # 시장 문서 검색 패키지
 ├── agents/                # 평가 기준별 Agent 모듈
 ├── prompts/               # 프롬프트 템플릿
 ├── outputs/               # 평가 결과 저장
@@ -122,7 +126,7 @@ macOS / Linux:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python rag/tech_ingest.py
+python -m rag.tech_rag.tech_ingest
 python app.py
 python app.py --trace  # LangSmith 추적 사용
 ```
@@ -133,12 +137,12 @@ Windows PowerShell:
 py -3 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python rag/tech_ingest.py
+python -m rag.tech_rag.tech_ingest
 python app.py
 python app.py --trace
 ```
 
-인덱스가 이미 있으면 `python rag/tech_ingest.py`를 생략합니다. Mock 데모는 `python demo_agents.py`, 테스트는 `python -m unittest discover -s tests -v`로 실행합니다. 현재 시장 RAG 연결은 개발 중입니다.
+인덱스가 이미 있으면 `python -m rag.tech_rag.tech_ingest`를 생략합니다. Mock 데모는 `python demo_agents.py`로 실행합니다. 시장 RAG 사용법은 `rag/market_rag/market_rag_README.md`를 참고합니다.
 
 ## Contributors 
 강서현 - Prompt (Agent별 Prompt 템플릿 작성)

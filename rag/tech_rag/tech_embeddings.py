@@ -32,8 +32,8 @@ class LocalE5Embeddings(Embeddings):
 
 def encode_in_worker():
     """분리된 프로세스에서 토큰 한도를 확인하고 E5 임베딩을 계산한다."""
-    root = Path(__file__).resolve().parents[1]
-    os.environ.setdefault("HF_HOME", str(root / ".cache/huggingface"))
+    repository_root = Path(__file__).resolve().parents[2]
+    os.environ.setdefault("HF_HOME", str(repository_root / ".cache/huggingface"))
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     from sentence_transformers import SentenceTransformer
     import torch

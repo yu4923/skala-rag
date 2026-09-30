@@ -7,7 +7,7 @@
 첨부된 담당자 코드는 `retriever.search(company_name=..., queries=[...])`를 호출하고 `RetrievedDocument` 필드를 받는다. 아래 객체를 주입하면 담당자의 기본 `adapt_retrieval_result`를 수정하지 않아도 된다. 이후 절의 `create_rag_search`는 저수준 6필드 인터페이스로 유지한다.
 
 ```python
-from rag.product_tech_retriever import ProductTechRAGRetriever
+from rag.tech_rag.product_tech_retriever import ProductTechRAGRetriever
 
 retriever = ProductTechRAGRetriever(top_k=3)
 documents = retriever.search(
@@ -20,7 +20,7 @@ documents = retriever.search(
 
 ```python
 from agents.tech_brief import ProductTechAgent
-from rag.product_tech_retriever import ProductTechRAGRetriever
+from rag.tech_rag.product_tech_retriever import ProductTechRAGRetriever
 
 agent = ProductTechAgent(model=model, retriever=ProductTechRAGRetriever(top_k=3))
 ```
@@ -38,7 +38,7 @@ result = run({
 # result는 Graph가 tech_result에 저장할 전문 평가 dict다.
 ```
 
-실행 전 `requirements-agent.txt`와 `requirements-tech.lock.txt`의 의존성을 준비하고 `python -m rag.tech_ingest`로 로컬 인덱스를 생성한다. RAG 전달 환경은 Python 3.11이다. 기존 `.venv`나 인덱스를 덮어쓰지 않는다. RAG 검색 자체에는 OpenAI 키가 필요 없지만, 위 `run()`의 기본 요약 모델에는 `.env`의 `OPENAI_API_KEY`와 `LLM_MODEL`(또는 `OPENAI_MODEL`)이 필요하다. 모델을 직접 주입할 수도 있다.
+실행 전 `requirements-agent.txt`와 `rag/tech_rag/requirements.lock.txt`의 의존성을 준비하고 `python -m rag.tech_rag.tech_ingest`로 로컬 인덱스를 생성한다. RAG 전달 환경은 Python 3.11이다. 기존 `.venv`나 인덱스를 덮어쓰지 않는다. RAG 검색 자체에는 OpenAI 키가 필요 없지만, 위 `run()`의 기본 요약 모델에는 `.env`의 `OPENAI_API_KEY`와 `LLM_MODEL`(또는 `OPENAI_MODEL`)이 필요하다. 모델을 직접 주입할 수도 있다.
 
 기본 검색기는 프로세스 안에서 재사용한다. 인덱스를 재생성한 뒤에는 프로세스를 재시작하거나 `agents.tech_brief.default_retriever.cache_clear()`를 호출한다. 외부에서 주입한 검색기는 직접 다시 생성한다. 초기화·import·검색 오류는 원인 예외를 보존한 `ProductTechRetrievalError`로 전달하며, 빈 검색 결과로 숨기지 않는다.
 
@@ -66,9 +66,9 @@ Agent 연결 테스트 24개는 `agent` 브랜치의 커밋 `6cafb0a`에서 통�
 - 빈 질의 목록 또는 공백만 있는 질의 목록은 `[]`. 중복 질의는 한 번만 검색한다.
 - 미지원 회사는 `ValueError`. 하나의 질의라도 검색에 실패하면 전체 호출이 예외를 전파하며 부분 성공을 정상 반환하지 않는다.
 - 기업별 검색 객체는 재사용하지만 문서 재구축 후에는 새 ProductTechRAGRetriever 객체를 만든다.
-- 회사명은 실제 DB 코드로 검증한다. 지원 별칭은 `rag/product_tech_retriever.py`의 resolve_company를 참조한다.
+- 회사명은 실제 DB 코드로 검증한다. 지원 별칭은 `rag/tech_rag/product_tech_retriever.py`의 resolve_company를 참조한다.
 
-전달 대상은 `rag/` 코드, 원본 PDF, `tech_data/vector_index_product/`, 의존성 파일과 이 매뉴얼이다. DB 폴더만 전달하면 임베딩·회사 라우팅·필드 매핑이 빠져 바로 연결할 수 없다. 전달용 ZIP에는 키·.env·.venv·모델 캐시를 포함하지 않는다.
+전달 대상은 `rag/` 코드, 원본 PDF, `rag/indexes/product/`, 의존성 파일과 이 매뉴얼이다. DB 폴더만 전달하면 임베딩·회사 라우팅·필드 매핑이 빠져 바로 연결할 수 없다. 전달용 ZIP에는 키·.env·.venv·모델 캐시를 포함하지 않는다.
 
 RAG 전달 당시 검증 범위: 담당자 첨부 코드의 RetrievedDocument, adapt_retrieval_result, prepare_documents를 분리해 실제 검색 결과로 검사했다. 당시에는 첨부 파일 끝과 evaluation_support/프롬프트 의존성이 없어 Agent 전체 실행은 검증하지 못했다. 현재 Agent 연결 테스트 이력은 위에 명시했다. 실제 인덱스 검색과 실제 LLM을 함께 사용하는 종단 간 검증은 별도로 필요하다.
 
@@ -93,7 +93,7 @@ RAG 전달 당시 검증 범위: 담당자 첨부 코드의 RetrievedDocument, a
 ```bash
 cd /Users/sun/Desktop/RAG/code/skala-rag
 .venv/bin/python - <<'PYTHON'
-from rag.tech_search import create_rag_search
+from rag.tech_rag.tech_search import create_rag_search
 
 rag_search = create_rag_search("HZ", top_k=3)
 results = rag_search("발전량 예측 API의 입력 데이터와 출력 결과, 연동 방식")
@@ -102,10 +102,10 @@ for result in results:
 PYTHON
 ```
 
-모듈의 최상위 함수는 `create_rag_search`다. 여기에서 반환한 함수가 아래 계약을 만족한다. `from rag.tech_search import rag_search`는 지원하지 않는다.
+모듈의 최상위 함수는 `create_rag_search`다. 여기에서 반환한 함수가 아래 계약을 만족한다. `from rag.tech_rag.tech_search import rag_search`는 지원하지 않는다.
 
 ```python
-from rag.tech_search import create_rag_search
+from rag.tech_rag.tech_search import create_rag_search
 
 rag_search = create_rag_search("HZ")
 # 반환된 함수의 시그니처: rag_search(query: str) -> list[dict]
@@ -130,7 +130,7 @@ create_rag_search(
 | `company_id` | 아래 기업 코드. 대소문자 무관. 회사명 문자열 대신 코드를 사용한다. |
 | `top_k` | 양의 정수. 중복 제거·필터링 이후 반환할 최대 개수. |
 | `min_similarity` | `None` 또는 -1~1 범위의 코사인 유사도 하한. 기본값은 미적용. |
-| `index_dir` | `manifest.json`과 기업별 하위 폴더를 포함한 인덱스 루트. 기본값은 프로젝트의 `tech_data/vector_index_product`. |
+| `index_dir` | `manifest.json`과 기업별 하위 폴더를 포함한 인덱스 루트. 기본값은 프로젝트의 `rag/indexes/product`. |
 
 | 코드 | 기업 | 자료집 PDF 페이지 |
 |---|---|---|
@@ -174,7 +174,7 @@ create_rag_search(
 어댑터를 개별 사용해야 한다면 다음 함수를 import한다.
 
 ```python
-from rag.tech_search import document_to_result
+from rag.tech_rag.tech_search import document_to_result
 
 result = document_to_result(document)
 ```
@@ -192,7 +192,7 @@ result = document_to_result(document)
 {
   "source_title": "에너지 스타트업 기술 자료집",
   "source_type": "pdf",
-  "source": "tech_data/tech-10-startups-50pages-2026-09-30.pdf",
+  "source": "rag/data/tech/tech-10-startups-50pages-2026-09-30.pdf",
   "excerpt": "에너지 스타트업 기술 자료집   7\n해줌 Haezoom 2 작동 원리와 기술 구성\nHZ-P2      기술 분석 자료  |  기준일 2026 09 30\n기술 항목\n공개 내용과 적용 조건\n예측 입력\n공개 API에 pid, start, end, ref, timezone, interval, tilt, azimuth 항목. 샘플의 과거 날짜\n를 현행 API 버전으로 추정하지 않음. [HZ2]\n기상 결합\n1~72시간 예측 및 위성·기상·설비 데이터 활용 설명. 학습 데이터 범위·모델 구조·모델별 성\n능 미확보. [HZ2, HZ3]\nDR 계측\n20초 단위 전력량 계량·감축 이행 확인 및 피크 사전 알림을 제품 기능으로 제시. [HZ7]\n전력중개 연계\n계약/서류→검사→필요 시 계량기 전환→시장가입/승인→자원 구성→예측 테스트→운영/정\n산. [HZ6]\n차별성 비교\n예측 API와 발전소 운영·소비자 DR까지 포괄. 엔라이튼·VPPLab 대비 실제 오차 우위는 동일 \n데이터로 미검증.\n시간 정보의 역할  [기술 해석] start와 end는 조회 구간, ref는 예측 기준 시점, timezone은 시각 해석에 관\n련된다. 동일 발전 시간에도 발행 시점이 다른 예측이 여러 개 존재할 수 있다. date 배열과 예측값 배열의 대\n응을 유지하고 발전소 ID와 기준 시점을 함께 보관해야 하루 전 예측과 직전 예측을 분리할 수 있다. 공개 샘\n플을 바탕으로 한 연동 해석이며 내부 저장 구조를 뜻하지 않는다. [HZ2]\n설비 조건과 예측  [기술 해석] 같은 지역이라도 패널의 기울기·방위각이 다르면 받는 일사량이 달라진다. 기",
   "page": 7,
   "published_date": null
@@ -217,7 +217,7 @@ result = document_to_result(document)
 | 임베딩 하위 프로세스 실패 | `RuntimeError` |
 
 ```python
-from rag.tech_search import create_rag_search
+from rag.tech_rag.tech_search import create_rag_search
 
 rag_search = create_rag_search("HZ")
 assert rag_search("   ") == []
@@ -230,7 +230,7 @@ Agent는 초기화와 검색 호출을 모두 오류 기록 범위에 포함해�
 
 ```python
 import logging
-from rag.tech_search import create_rag_search
+from rag.tech_rag.tech_search import create_rag_search
 
 logger = logging.getLogger(__name__)
 try:
@@ -265,21 +265,21 @@ except Exception:
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements-tech.lock.txt
+.venv/bin/python -m pip install -r rag/tech_rag/requirements.lock.txt
 ```
 
 필요 파일:
 
 ```text
 rag/__init__.py
-rag/product_tech_retriever.py
-rag/tech_ingest.py
-rag/tech_search.py
-rag/tech_embeddings.py
-requirements-tech.txt
-requirements-tech.lock.txt
-tech_data/tech-10-startups-50pages-2026-09-30.pdf
-tech_data/vector_index_product/
+rag/tech_rag/product_tech_retriever.py
+rag/tech_rag/tech_ingest.py
+rag/tech_rag/tech_search.py
+rag/tech_rag/tech_embeddings.py
+rag/tech_rag/requirements.txt
+rag/tech_rag/requirements.lock.txt
+rag/data/tech/tech-10-startups-50pages-2026-09-30.pdf
+rag/indexes/product/
   manifest.json
   EN/index.faiss
   EN/index.pkl
@@ -298,17 +298,17 @@ tech_data/vector_index_product/
 DB가 없는 새 환경에서:
 
 ```bash
-.venv/bin/python rag/tech_ingest.py
+.venv/bin/python -m rag.tech_rag.tech_ingest
 ```
 
 이미 같은 출력 경로가 있으면 `FileExistsError`로 중단한다. 기존 인덱스를 덮어쓰지 않는다. 재구축하려면 새 출력 경로를 사용한다.
 
 ```python
 from pathlib import Path
-from rag.tech_ingest import build_vector_db
-from rag.tech_search import create_rag_search
+from rag.tech_rag.tech_ingest import build_vector_db
+from rag.tech_rag.tech_search import create_rag_search
 
-new_index = Path("tech_data/vector_index_product_next")
+new_index = Path("rag/indexes/product_next")
 build_vector_db(output_dir=new_index)
 rag_search = create_rag_search("HZ", index_dir=new_index)
 ```

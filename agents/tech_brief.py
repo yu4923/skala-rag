@@ -23,11 +23,11 @@ MODEL = None
 MODEL_FACTORY = create_model_from_env
 MODEL_SETTINGS = {"timeout": 60, "max_retries": 2}  # 모델명은 .env의 LLM_MODEL에서 읽는다.
 RETRIEVER = None
-RETRIEVER_TOP_K = 3  # 질의별 최대 청크 수. rag/product_tech_retriever.py에 전달한다.
+RETRIEVER_TOP_K = 3  # 질의별 최대 청크 수. tech_rag 검색기에 전달한다.
 
 # 프롬프트 수정 위치: prompts/tech_brief_prompt.py의 TECH_BRIEF_PROMPT.
 # 앞서 합의한 파일 import 방식을 유지한다. 최종 본문을 이 파일에 중복 복사하지 않는다.
-# RAG 연결 위치: rag/product_tech_retriever.py. 반환 형식은 RetrievedDocument와 동일하다.
+# RAG 연결 위치: rag/tech_rag. 반환 형식은 RetrievedDocument와 동일하다.
 TECH_CRITERIA = dict(CRITERIA["technology"])
 
 
@@ -38,7 +38,7 @@ class ProductTechRetrievalError(RuntimeError):
 @lru_cache(maxsize=1)
 def default_retriever(top_k):
     """RAG 의존성은 실제 사용 시 로딩한다. 인덱스 재생성 후 cache_clear() 필요."""
-    from rag.product_tech_retriever import ProductTechRAGRetriever
+    from rag.tech_rag.product_tech_retriever import ProductTechRAGRetriever
 
     return ProductTechRAGRetriever(top_k=top_k)
 

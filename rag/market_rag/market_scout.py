@@ -1,6 +1,6 @@
 """Market-document RAG search interface.
 
-This module intentionally owns only retrieval from PDFs in ``market_data``.
+This module intentionally owns only retrieval from PDFs in ``rag/data/market``.
 Company-specific web searches and investment scoring belong to the Market
 Scout agent/orchestrator, not to this RAG layer.
 
@@ -9,8 +9,8 @@ Public API:
     initialize_market_rag()
     rag_search(query: str) -> list[dict]
 
-The on-disk FAISS index is a disposable cache under ``market_index``.  It is
-rebuilt automatically when a source PDF or an indexing setting changes.
+The on-disk FAISS index is a disposable cache under ``rag/indexes/market``.
+It is rebuilt automatically when a source PDF or an indexing setting changes.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ from typing import Any, Sequence
 import unicodedata
 
 
-# This folder is merged as one self-contained unit. Keep data and generated
-# indexes inside it instead of depending on paths elsewhere in the repository.
-PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = PROJECT_ROOT / "market_data"
-DEFAULT_INDEX_DIR = PROJECT_ROOT / "market_index"
+# 두 RAG가 같은 루트에 있어도 시장 자료만 읽도록 도메인별 경로를 분리한다.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+RAG_ROOT = REPOSITORY_ROOT / "rag"
+DEFAULT_DATA_DIR = RAG_ROOT / "data/market"
+DEFAULT_INDEX_DIR = RAG_ROOT / "indexes/market"
 DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
 _TOKEN_PATTERN = re.compile(r"[0-9A-Za-z가-힣]+", re.UNICODE)
@@ -545,7 +545,7 @@ def _file_sha256(path: Path) -> str:
 
 def _relative_source_path(path: Path) -> str:
     try:
-        value = path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+        value = path.resolve().relative_to(REPOSITORY_ROOT.resolve()).as_posix()
     except ValueError:
         value = path.resolve().as_posix()
     return unicodedata.normalize("NFC", value)
