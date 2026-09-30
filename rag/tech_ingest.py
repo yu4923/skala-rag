@@ -13,8 +13,8 @@ else:
     from tech_embeddings import LocalE5Embeddings
 
 ROOT = Path(__file__).resolve().parents[1]
-PDF = ROOT / "tech_data/tech-10-startups-50pages-2026-09-30.pdf"
-INDEX = ROOT / "tech_data/vector_index_product"
+PDF = ROOT / "data/tech/tech-10-startups-50pages-2026-09-30.pdf"
+INDEX = ROOT / "rag/vector_index_product"
 SOURCE_TITLE = "에너지 스타트업 기술 자료집"
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100

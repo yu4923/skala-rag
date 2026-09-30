@@ -1,6 +1,6 @@
 """Market-document RAG search interface.
 
-This module intentionally owns only retrieval from PDFs in ``market_data``.
+This module intentionally owns only retrieval from PDFs in ``data/market``.
 Company-specific web searches and investment scoring belong to the Market
 Scout agent/orchestrator, not to this RAG layer.
 
@@ -28,11 +28,10 @@ from typing import Any, Sequence
 import unicodedata
 
 
-# This folder is merged as one self-contained unit. Keep data and generated
-# indexes inside it instead of depending on paths elsewhere in the repository.
-PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = PROJECT_ROOT / "market_data"
-DEFAULT_INDEX_DIR = PROJECT_ROOT / "market_index"
+# 원본 PDF는 루트 data/market, 생성 인덱스는 rag/market_index에 둔다.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = PROJECT_ROOT / "data/market"
+DEFAULT_INDEX_DIR = PROJECT_ROOT / "rag/market_index"
 DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
 _TOKEN_PATTERN = re.compile(r"[0-9A-Za-z가-힣]+", re.UNICODE)
@@ -118,16 +117,22 @@ class E5Embedder:
     """SentenceTransformer adapter that applies E5 query/passage prefixes."""
 
     def __init__(self, model_name: str) -> None:
+        # macOS의 FAISS/PyTorch OpenMP 충돌을 피하면서 사용자 설정은 우선한다.
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
             raise MarketRAGError(
-                "sentence-transformers is required. Install market_requirements.txt."
+                "sentence-transformers is required. Install requirements.txt."
             ) from exc
 
         self.model_name = model_name
         try:
-            self.model = SentenceTransformer(model_name)
+            try:
+                self.model = SentenceTransformer(model_name, local_files_only=True)
+            except Exception:
+                self.model = SentenceTransformer(model_name)
         except Exception as exc:
             raise MarketRAGError(
                 f"failed to load embedding model {model_name!r}: {exc}"
@@ -313,13 +318,13 @@ class MarketRAG:
             import faiss
         except ImportError as exc:
             raise MarketRAGError(
-                "faiss-cpu is required. Install market_requirements.txt."
+                "faiss-cpu is required. Install requirements.txt."
             ) from exc
 
         embedder = self._get_embedder()
         self.chunks = _load_and_chunk_pdfs(pdf_paths, self.settings, embedder.tokenizer)
         if not self.chunks:
-            raise MarketRAGError("no searchable text was extracted from market_data PDFs.")
+            raise MarketRAGError("no searchable text was extracted from data PDFs.")
 
         vectors = embedder.embed_documents([chunk.excerpt for chunk in self.chunks])
         if len(vectors.shape) != 2 or vectors.shape[0] != len(self.chunks):
@@ -434,7 +439,7 @@ def _load_and_chunk_pdfs(
         import pymupdf
     except ImportError as exc:
         raise MarketRAGError(
-            "PyMuPDF is required. Install market_requirements.txt."
+            "PyMuPDF is required. Install requirements.txt."
         ) from exc
 
     chunks: list[MarketChunk] = []

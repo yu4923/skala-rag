@@ -4,6 +4,7 @@ import json
 
 from .tech_ingest import COMPANIES, INDEX
 from .tech_search import create_rag_search
+from .tech_embeddings import LocalE5Embeddings
 
 
 def resolve_company(company_name: str) -> str:
@@ -70,8 +71,9 @@ class ProductTechRAGRetriever:
                 index_dir=self.index_dir,
             )
         results, seen = [], set()
-        for query in queries:
-            for result in self._searchers[code](query):
+        vectors = LocalE5Embeddings().embed_queries(queries)
+        for query, vector in zip(queries, vectors, strict=True):
+            for result in self._searchers[code](query, query_vector=vector):
                 document = to_agent_document(result, company_name, code)
                 key = (document["document_id"], document["chunk_id"], document["page"])
                 if key not in seen:

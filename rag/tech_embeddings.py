@@ -17,7 +17,11 @@ class LocalE5Embeddings(Embeddings):
 
     def embed_query(self, text):
         """질문에 E5 질의용 접두사를 붙여 벡터 하나로 변환한다."""
-        return self._encode(["query: " + text])[0]
+        return self.embed_queries([text])[0]
+
+    def embed_queries(self, texts):
+        """한 평가의 검색 질의를 한 번의 모델 로딩으로 임베딩한다."""
+        return self._encode(["query: " + text for text in texts])
 
     def _encode(self, texts):
         """FAISS 프로세스에 PyTorch를 불러오지 않고 임베딩만 요청한다."""
@@ -39,7 +43,11 @@ def encode_in_worker():
     import torch
 
     torch.set_num_threads(1)
-    model = SentenceTransformer("intfloat/multilingual-e5-small", device="cpu")
+    model_name = "intfloat/multilingual-e5-small"
+    try:
+        model = SentenceTransformer(model_name, device="cpu", local_files_only=True)
+    except Exception:
+        model = SentenceTransformer(model_name, device="cpu")
     texts = json.load(sys.stdin)
     for text in texts:
         if len(model.tokenizer(text)["input_ids"]) > 512:

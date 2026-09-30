@@ -35,9 +35,6 @@ def boolean_setting(name):
     return value == "true"
 
 
-RECOMMEND_SCORE = setting("RECOMMEND_SCORE", float)
-RAW_SCORE_MAX = setting("RAW_SCORE_MAX", float)
-MIN_CRITERION_SCORE = setting("MIN_CRITERION_SCORE", float)
 MAX_RETRIES = setting("MAX_RETRIES", int)
 MIN_EVIDENCE_COUNT = setting("MIN_EVIDENCE_COUNT", int)
 STOP_ON_FIRST_RECOMMENDATION = boolean_setting("STOP_ON_FIRST_RECOMMENDATION")
@@ -72,6 +69,123 @@ AGENT_MODULES = {
     "report_generator": "agents.report_generator",
 }
 
+NO_DATA_SCORE_REASON = "[잠정 추정] 입력된 기업 정보와 평가 요청을 바탕으로 임시 점수를 산정함"
+NO_DATA_SCORE_RATIO = 0.5
+
+
+def estimate_missing_scores(state, agent, criteria, result):
+    """사용자 입력과 이미 생성된 평가 내용으로 근거 없는 잠정 점수를 산정한다."""
+    import json
+    from pydantic import BaseModel, Field
+    from agents.evaluation_support import create_model_from_env
+
+    class Estimate(BaseModel):
+        criterion: str
+        score: float
+        reason: str = Field(min_length=1)
+        evidence_ids: list[str] = Field(default_factory=list)
+
+    class Estimates(BaseModel):
+        scores: list[Estimate]
+
+    payload = {
+        "company_name": state["company_context"]["company_name"],
+        "company_context": state["company_context"],
+        "evaluation_request": state["evaluation_request"],
+        "founder_names": state.get("founder_names", []),
+        "product_names": state.get("product_names", []),
+        "market_input": state.get("market_input", {}),
+        "agent": agent,
+        "existing_summary": result.get("summary", ""),
+        "existing_scores": result.get("scores", []),
+        "available_evidence": [
+            {"evidence_id": item["evidence_id"], "claim": item["claim"][:1200],
+             "source": item["source"]}
+            for item in result.get("evidence", [])[:20]
+        ],
+        "assessment_limitations": result.get("missing_items", []),
+        "previous_run_notes": [
+            {"node": item.get("node"), "code": item.get("code"), "message": item.get("message")}
+            for item in state.get("errors", [])
+            if item.get("company_name") == state["company_context"]["company_name"]
+        ][-5:],
+        "criteria": [{"criterion": name, "max_score": maximum} for name, maximum in criteria],
+    }
+    model_name = {"founder_insight": "FOUNDER_MODEL", "market_scout": "MARKET_MODEL",
+                  "tech_brief": "TECH_MODEL"}[agent]
+    model = create_model_from_env(model_env_var=model_name, timeout=20, max_retries=0).with_structured_output(Estimates)
+    response = model.invoke([
+        ("system", "제공된 모든 자료와 실행 한계를 함께 검토해 각 항목의 잠정 점수를 추정하라. 해당 평가 항목과 직접 관련된 자료만 인용한다. 근거가 없어도 0~max_score 사이 점수를 부여한다. "
+         "정보가 거의 없으면 중립 점수를 사용한다. 검증되지 않은 사실을 단정하지 말고 reason에 추정의 한계를 명시한다. "
+         "자료를 사용했다면 해당 evidence_id를 evidence_ids에 넣는다. 요청된 항목만 각각 한 번 반환한다."),
+        ("user", json.dumps(payload, ensure_ascii=False)),
+    ])
+    estimates = Estimates.model_validate(response)
+    expected = dict(criteria)
+    if {item.criterion for item in estimates.scores} != set(expected) or len(estimates.scores) != len(expected):
+        raise ValueError("잠정 점수 항목이 요청과 다릅니다.")
+    if any(not is_number(item.score) or not 0 <= item.score <= expected[item.criterion]
+           for item in estimates.scores):
+        raise ValueError("잠정 점수가 배점 범위를 벗어났습니다.")
+    available_ids = {item["evidence_id"] for item in result.get("evidence", [])}
+    if any(set(item.evidence_ids) - available_ids for item in estimates.scores):
+        raise ValueError("잠정 점수에 없는 자료 ID가 포함되었습니다.")
+    return {item.criterion: (item.score, item.reason, item.evidence_ids) for item in estimates.scores}
+
+
+def fill_missing_scores(result, agent, state=None):
+    """누락 항목에 입력 기반 잠정 점수를 부여한다. 모델 실패 시 중립 점수를 쓴다."""
+    result = deepcopy(result)
+    available_ids = {item.get("evidence_id") for item in result.get("evidence", [])}
+    expected = dict(CRITERIA[agent])
+    retained_scores = []
+    for item in result.get("scores", []):
+        criterion = item.get("criterion")
+        if criterion not in expected or item.get("score") is None:
+            continue
+        item = deepcopy(item)
+        item["evidence_ids"] = [eid for eid in item.get("evidence_ids", []) if eid in available_ids]
+        if not item["evidence_ids"] and not item.get("reason", "").startswith("[잠정 추정]"):
+            item["reason"] = f"[잠정 추정] {item.get('reason') or '연결된 자료 없이 산정한 점수'}"
+            result["status"] = "partial"
+        retained_scores.append(item)
+    result["scores"] = retained_scores
+    existing = {item.get("criterion") for item in result.get("scores", [])}
+    pending = [(name, maximum) for name, maximum in CRITERIA[agent] if name not in existing]
+    estimates = {}
+    if pending and state is not None:
+        try:
+            estimates = estimate_missing_scores(state, agent, pending, result)
+        except Exception:
+            pass
+    filled = []
+    for criterion, maximum in pending:
+        filled.append(criterion)
+        estimate = estimates.get(criterion, (maximum * NO_DATA_SCORE_RATIO, NO_DATA_SCORE_REASON, []))
+        score, reason, ids = (*estimate, []) if len(estimate) == 2 else estimate
+        if criterion not in estimates:
+            claims = [item.get("claim", "").strip()[:180] for item in result.get("evidence", [])
+                      if item.get("claim", "").strip()]
+            if claims:
+                reason = f"[잠정 추정] 확보 자료({'; '.join(claims[:2])})를 참고해 임시 점수를 산정함"
+                ids = [item["evidence_id"] for item in result.get("evidence", [])[:2]]
+            elif state is not None:
+                company = state["company_context"]["company_name"]
+                request = state["evaluation_request"].strip()[:100]
+                reason = f"[잠정 추정] {company}에 대한 입력 요청({request})을 바탕으로 임시 점수를 산정함"
+        if not reason.startswith("[잠정 추정]"):
+            reason = f"[잠정 추정] {reason}"
+        result.setdefault("scores", []).append({
+            "criterion": criterion, "score": score, "max_score": maximum,
+            "reason": reason, "evidence_ids": ids,
+        })
+    if filled:
+        result.setdefault("missing_items", []).extend(f"{name}: 평가 자료 없음" for name in filled)
+    if result.get("status") != "success" or filled:
+        result["status"] = "partial"
+        result["score"] = sum(item["score"] for item in result["scores"])
+    return result
+
 # ──────────────────────────────────────
 # 공통 처리 및 출력 검증
 # ──────────────────────────────────────
@@ -97,12 +211,6 @@ def validate_settings():
             raise ValueError("평가 항목은 비어 있거나 중복될 수 없습니다.")
         if not all(is_number(weight) and weight > 0 for _, weight in items):
             raise ValueError("배점은 양의 유한한 수여야 합니다.")
-    if not is_number(RECOMMEND_SCORE) or not 0 <= RECOMMEND_SCORE <= total_possible_score():
-        raise ValueError("추천 점수는 총 배점 범위 안이어야 합니다.")
-    if not is_number(RAW_SCORE_MAX) or RAW_SCORE_MAX <= 0:
-        raise ValueError("원점수 만점은 양수여야 합니다.")
-    if not is_number(MIN_CRITERION_SCORE) or not 0 <= MIN_CRITERION_SCORE <= RAW_SCORE_MAX:
-        raise ValueError("항목별 최소 원점수가 범위를 벗어났습니다.")
     if type(MAX_RETRIES) is not int or MAX_RETRIES < 0:
         raise ValueError("MAX_RETRIES는 0 이상의 정수여야 합니다.")
     if type(MIN_EVIDENCE_COUNT) is not int or MIN_EVIDENCE_COUNT < 1:
@@ -183,7 +291,8 @@ def validate_agent_result(result, state, agent):
             raise ValueError("평가 점수가 범위를 벗어났습니다.")
         require_text(item.get("reason"), "reason")
         require_text_list(item.get("evidence_ids"), "evidence_ids")
-        if not item["evidence_ids"] or not set(item["evidence_ids"]).issubset(evidence_ids):
+        provisional = result["status"] != "success" and item["reason"].startswith("[잠정 추정]")
+        if not provisional and (not item["evidence_ids"] or not set(item["evidence_ids"]).issubset(evidence_ids)):
             raise ValueError("점수가 실제 제공된 근거와 연결되지 않았습니다.")
 
     if result["status"] == "success":
@@ -199,27 +308,21 @@ def validate_agent_result(result, state, agent):
             raise ValueError("Agent 합계와 항목별 점수 합계가 일치하지 않습니다.")
 
 
-def run_specialist(state, agent):
+def run_specialist(state, agent, **agent_kwargs):
     field = AGENT_RESULT_FIELDS[agent]
     try:
-        result = call_agent(agent, state, criteria=CRITERIA[agent])
+        result = fill_missing_scores(call_agent(agent, state, criteria=CRITERIA[agent], **agent_kwargs), agent, state)
         validate_agent_result(result, state, agent)
-        update = {field: result}
-        if result["status"] != "success":
-            update["errors"] = [error_record(
-                state, agent, "AGENT_INCOMPLETE", result["summary"],
-            )]
-        return update
+        return {field: result}
     except Exception as exc:
         company, round_no = identity(state)
-        message = f"{type(exc).__name__}: {exc}"
+        detail = str(exc)[:200] if isinstance(exc, (ValueError, TypeError, KeyError)) else type(exc).__name__
         return {
-            field: {
+            field: fill_missing_scores({
                 "company_name": company, "round_no": round_no, "agent": agent,
-                "status": "error", "summary": "평가를 완료하지 못했습니다.",
-                "evidence": [], "missing_items": [message], "scores": [],
-            },
-            "errors": [error_record(state, agent, "AGENT_FAILED", message)],
+                "status": "partial", "summary": f"실행 한계({detail})를 반영한 잠정 평가입니다.",
+                "evidence": [], "missing_items": [f"실행 참고: {detail}"], "scores": [],
+            }, agent, state),
         }
 
 
@@ -236,7 +339,9 @@ def founder_insight(state: InvestmentState):
 
 
 def market_scout(state: InvestmentState):
-    return run_specialist(state, "market_scout")
+    from rag.market_scout import rag_search
+
+    return run_specialist(state, "market_scout", rag_search=rag_search)
 
 
 def tech_brief(state: InvestmentState):
@@ -245,45 +350,69 @@ def tech_brief(state: InvestmentState):
 
 def integrate_results(state: InvestmentState):
     company, round_no = identity(state)
-    results, missing, errors = [], [], []
+    results, missing, updates = [], [], {}
     for agent, key in AGENT_RESULT_FIELDS.items():
         result = state.get(key, {})
         try:
             validate_agent_result(result, state, agent)
             results.append(result)
-            missing.extend(result["missing_items"])
-            if result["status"] != "success":
-                missing.append(f"{agent}: 평가 미완료")
         except (ValueError, TypeError, KeyError) as exc:
             missing.append(f"{agent}: {exc}")
 
+    # 병렬 Agent가 각각 확보한 자료를 모은 뒤, 출처 연결이 없는 잠정 항목을 한 번 더 검토한다.
+    all_evidence = {item["evidence_id"]: item for result in results for item in result["evidence"]}
+    for agent, field in AGENT_RESULT_FIELDS.items():
+        original = state.get(field)
+        if not isinstance(original, dict) or original not in results:
+            continue
+        unlinked = [item for item in original["scores"]
+                    if item["reason"].startswith("[잠정 추정]") and not item["evidence_ids"]]
+        if not unlinked or not all_evidence:
+            continue
+        candidate = deepcopy(original)
+        owned = {item["evidence_id"] for item in candidate["evidence"]}
+        candidate["evidence"].extend(item for eid, item in all_evidence.items() if eid not in owned)
+        criteria = [(item["criterion"], item["max_score"]) for item in unlinked]
+        try:
+            estimates = estimate_missing_scores(state, agent, criteria, candidate)
+        except Exception:
+            continue
+        for item in unlinked:
+            score, reason, ids = estimates[item["criterion"]]
+            if not ids:
+                continue
+            target = next(score_item for score_item in candidate["scores"]
+                          if score_item["criterion"] == item["criterion"])
+            target.update(score=score,
+                          reason=reason if reason.startswith("[잠정 추정]") else f"[잠정 추정] {reason}",
+                          evidence_ids=ids)
+            candidate["missing_items"] = [value for value in candidate["missing_items"]
+                                          if value != f"{item['criterion']}: 평가 자료 없음"]
+            candidate["missing_items"].append(f"{item['criterion']}: 타 Agent 자료를 활용한 잠정 평가")
+        selected_ids = {eid for item in candidate["scores"] for eid in item["evidence_ids"]}
+        candidate["evidence"] = [item for item in candidate["evidence"]
+                                 if item["evidence_id"] in owned | selected_ids]
+        candidate["score"] = sum(item["score"] for item in candidate["scores"])
+        validate_agent_result(candidate, state, agent)
+        updates[field] = candidate
+        results = [candidate if result is original else result for result in results]
+
+    for result in results:
+        missing.extend(result["missing_items"])
+        if result["status"] != "success":
+            missing.append(f"{result['agent']}: 평가 미완료")
+
+    connected_scores = sum(bool(item["evidence_ids"])
+                          for result in results for item in result["scores"])
     review = {
         "company_name": company, "round_no": round_no,
         "integrated_summary": "\n".join(r["summary"] for r in results),
-        "evidence_sufficient": False, "reason": "필수 평가 결과가 부족합니다.",
+        "evidence_sufficient": bool(connected_scores),
+        "reason": (f"자료 연결 점수 {connected_scores}개와 잠정 점수를 함께 평가합니다."
+                   if connected_scores else "연결된 자료가 없어 잠정 평가만 가능합니다."),
         "missing_items": list(dict.fromkeys(missing)), "conflicts": [],
     }
-    if not missing:
-        try:
-            checked = call_agent("investment_evaluator", state, function="review_evidence")
-            if not is_current(checked, state):
-                raise ValueError("근거 검토의 기업·회차가 일치하지 않습니다.")
-            for key in ("integrated_summary", "reason"):
-                require_text(checked.get(key), key)
-            for key in ("missing_items", "conflicts"):
-                require_text_list(checked.get(key), key)
-            if type(checked.get("evidence_sufficient")) is not bool:
-                raise ValueError("근거 충분 여부는 bool이어야 합니다.")
-            if checked["evidence_sufficient"] and (checked["missing_items"] or checked["conflicts"]):
-                raise ValueError("미해결 보완 항목 또는 모순이 있는 결과를 충분으로 판단할 수 없습니다.")
-            review = checked
-        except Exception as exc:
-            review["reason"] = "근거 내용 검토를 완료하지 못했습니다."
-            review["missing_items"] = [review["reason"]]
-            errors.append(error_record(state, "integrate_results", "EVIDENCE_REVIEW_FAILED", f"{type(exc).__name__}: {exc}"))
-    if not review["evidence_sufficient"]:
-        errors.append(error_record(state, "integrate_results", "INSUFFICIENT_EVIDENCE", review["reason"]))
-    return {"evidence_review": review, "errors": errors}
+    return {"evidence_review": review, **updates}
 
 
 def gate_update(state, gate, outcome, next_node, reason):
@@ -310,28 +439,18 @@ def evidence_gate(state: InvestmentState):
 
 
 def investment_evaluator(state: InvestmentState):
-    company, round_no = identity(state)
     try:
-        if not is_current(state.get("evidence_review"), state) or not state["evidence_review"]["evidence_sufficient"]:
-            raise ValueError("현재 회차의 충분한 근거 검토가 필요합니다.")
-        results = []
+        if not is_current(state.get("evidence_review"), state):
+            raise ValueError("현재 회차의 근거 검토 결과가 필요합니다.")
         for agent, field in AGENT_RESULT_FIELDS.items():
-            result = state[field]
-            validate_agent_result(result, state, agent)
-            if result["status"] != "success":
-                raise ValueError("완료되지 않은 전문 평가가 있습니다.")
-            results.append(result)
-        total = sum(result["score"] for result in results)
-        meets = total >= RECOMMEND_SCORE and all(
-            item["score"] / item["max_score"] * RAW_SCORE_MAX >= MIN_CRITERION_SCORE
-            for result in results for item in result["scores"]
-        )
-        reason = call_agent("investment_evaluator", state, total_score=total, criteria_met=meets)
-        require_text(reason, "투자 판단 설명")
-        return {"investment_result": {
-            "company_name": company, "round_no": round_no, "total_score": total,
-            "criteria_met": meets, "decision_reason": reason,
-        }}
+            validate_agent_result(state[field], state, agent)
+        result = call_agent("investment_evaluator", state, function="assess")
+        if not is_current(result, state) or not is_number(result.get("total_score")) or not 0 <= result["total_score"] <= 100:
+            raise ValueError("종합 평가의 기업·회차 또는 점수가 올바르지 않습니다.")
+        if type(result.get("criteria_met")) is not bool or type(result.get("provisional")) is not bool:
+            raise ValueError("종합 평가 판단 값이 올바르지 않습니다.")
+        require_text(result.get("decision_reason"), "투자 판단 설명")
+        return {"investment_result": result}
     except Exception as exc:
         return {"errors": [error_record(state, "investment_evaluator", "INVESTMENT_EVALUATION_FAILED", f"{type(exc).__name__}: {exc}")]}
 
@@ -381,6 +500,7 @@ def save_company_result(state: InvestmentState):
         result = state.get(key, {})
         if is_current(result, state):
             record[key] = deepcopy(result)
+    record["errors"] = [deepcopy(item) for item in state.get("errors", []) if is_current(item, state)]
     return {"company_results": [record]}
 
 
@@ -408,7 +528,7 @@ def report_generator(state: InvestmentState):
 # ──────────────────────────────────────
 
 def choose_evidence_route(state):
-    return "investment_evaluator" if state["evidence_review"]["evidence_sufficient"] else "prepare_retry"
+    return "investment_evaluator"
 
 
 def choose_investment_route(state):

@@ -113,8 +113,8 @@ class FounderInsightAgent:
     """
 
     def __init__(self, model: Any, web_search: FounderSearch, *,
-                 system_prompt: str | None = None, max_searches: int = 8,
-                 recursion_limit: int = 30):
+                 system_prompt: str | None = None, max_searches: int = 4,
+                 recursion_limit: int = 10):
         if max_searches < 2 or recursion_limit < 1:
             raise ValueError("max_searches >= 2, recursion_limit >= 1이어야 합니다.")
         self.system_prompt = founder_insight_prompt.FOUNDER_INSIGHT_PROMPT if system_prompt is None else system_prompt
@@ -215,19 +215,18 @@ class FounderInsightAgent:
                     raise ValueError("검색 결과에 없는 URL 또는 출처명입니다.")
                 # LLM이 작성한 claim 대신 실제 검색 원문을 공통 Evidence에 보존한다.
                 used.update((item.evidence_id, item) for item in matches)
-            missing = list(dict.fromkeys([*assessment.missing_items, *issues]))
+            missing = list(assessment.missing_items)
             score = assessment.score if used else None
             if score is None:
                 missing.append("창업자·팀 역량 점수를 확정할 근거가 부족합니다.")
             if not used:
                 missing.append("평가를 뒷받침하는 웹 근거가 인용되지 않았습니다.")
-            domains = {urlsplit(item.source_url).hostname.removeprefix("www.") for item in used.values()}
-            if used and len(domains) < 2:
-                missing.append("주요 경력을 뒷받침하는 독립 출처의 추가 교차검증이 필요합니다.")
-            # 프롬프트에는 confidence가 없다. 출처 개수만으로 high를 부여하지 않는다.
-            needs_more = bool(missing or assessment.risks or score is None)
+            # 일부 검색 실패나 위험은 확보한 근거로 산정한 점수를 자동 무효화하지 않는다.
+            needs_more = bool(missing or score is None)
             confidence = "low" if needs_more else "medium"
             reason = assessment.conclusion
+            if issues:
+                reason += "\n검색 참고: " + "; ".join(dict.fromkeys(issues))
             if used:
                 # 공통 Evidence에는 날짜 필드가 없어 평가 사유에 ID별 확인일을 남긴다.
                 reason += "\n근거 확인 날짜: " + "; ".join(
@@ -240,14 +239,15 @@ class FounderInsightAgent:
                                confidence=confidence, needs_more_information=needs_more)
         except Exception as exc:
             logger.warning("founder.evaluation_failed: %s", type(exc).__name__)
-            return self._unavailable(request, [*issues, "모델 응답 또는 출처 검증에 실패하여 재평가가 필요합니다."])
+            return self._unavailable(request, [*issues, "모델 응답 또는 출처 검증 실패"], registry.values())
 
     @staticmethod
-    def _unavailable(request: FounderAgentInput, reasons: list[str]) -> AgentResult:
+    def _unavailable(request: FounderAgentInput, reasons: list[str],
+                     evidence: Sequence[Evidence] = ()) -> AgentResult:
         return AgentResult(agent_name="founder", company_name=request.company_name,
                            evaluations=[CriterionEvaluation(criterion="founder_team", score=None,
-                                       reason="확인 가능한 근거가 부족하거나 평가 실행에 실패했습니다.")],
-                           evidence=[], missing_information=list(dict.fromkeys(reasons)),
+                                       reason="확보한 자료와 실행 한계를 참고해 잠정 평가가 필요합니다.")],
+                           evidence=list(evidence), missing_information=list(dict.fromkeys(reasons)),
                            confidence="low", needs_more_information=True)
 
 
@@ -268,7 +268,7 @@ def _default_web_search(query: str) -> list[Evidence]:
                           "max_results": TAVILY_MAX_RESULTS}).encode("utf-8")
     request = Request(TAVILY_API_URL, data=payload,
                       headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=30) as response:
+    with urlopen(request, timeout=10) as response:
         results = json.load(response)["results"]
     return [Evidence(evidence_id=f"web-{sha256(json.dumps([item['url'], item['content'], item.get('title') or item['url']], ensure_ascii=False).encode()).hexdigest()[:20]}", claim=item["content"],
                      source_title=item.get("title") or item["url"],
@@ -287,15 +287,18 @@ def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     model = kwargs.get("model")
     if model is None:
         from langchain_openai import ChatOpenAI
-        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
+        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE,
+                           timeout=30, max_retries=0)
     web_search = kwargs.get("web_search", _default_web_search)
     result = create_founder_agent(model, web_search).invoke(request, config=kwargs.get("config"))
     evidence = [{"evidence_id": item.evidence_id, "claim": item.claim,
                  "excerpt": item.claim, "source_type": "web", "source": item.source_url}
                 for item in result.evidence]
-    missing = list(dict.fromkeys([*result.missing_information, *result.risks]))
+    missing = result.missing_information
     evaluation = result.evaluations[0]
     summary = evaluation.reason
+    if result.risks:
+        summary += "\n검토 위험: " + "; ".join(result.risks)
     scores = []
     if evaluation.score is not None and evaluation.evidence_ids:
         criteria = kwargs.get("criteria", [(FOUNDER_CRITERION, FOUNDER_MAX_SCORE)])

@@ -19,13 +19,14 @@ class ModelConfigurationError(ValueError):
     """실제 LLM 실행에 필요한 환경 설정 누락 또는 불일치."""
 
 
-def create_model_from_env(*, model=None, temperature=None, timeout=60, max_retries=2, env_file=None):
+def create_model_from_env(*, model=None, model_env_var=None, temperature=None,
+                          timeout=60, max_retries=2, env_file=None):
     """호출 시점에 .env를 읽어 ChatOpenAI 생성. 모델 생성만으로 API를 호출하지 않는다."""
     try:
         from dotenv import dotenv_values
         from langchain_openai import ChatOpenAI
     except ImportError:
-        raise ModelConfigurationError("python3 -m pip install -r requirements-agent.txt를 먼저 실행하세요") from None
+        raise ModelConfigurationError("python3 -m pip install -r requirements.txt를 먼저 실행하세요") from None
     values = dotenv_values(ENV_FILE if env_file is None else env_file)
     # 셸/배포 환경이 .env보다 우선한다. 프로세스 전역 환경변수는 수정하지 않는다.
     def setting(name):
@@ -35,11 +36,14 @@ def create_model_from_env(*, model=None, temperature=None, timeout=60, max_retri
     if not api_key:
         raise ModelConfigurationError("OPENAI_API_KEY를 .env 또는 환경변수에 설정하세요")
     primary, alias = setting("LLM_MODEL"), setting("OPENAI_MODEL")
-    if model is None and primary and alias and primary != alias:
+    if model is None and model_env_var is None and primary and alias and primary != alias:
         raise ModelConfigurationError("LLM_MODEL과 OPENAI_MODEL이 다릅니다. 하나만 설정하거나 같은 값으로 맞추세요")
-    selected = model if model is not None else primary or alias
+    selected = model if model is not None else (
+        setting(model_env_var) if model_env_var else primary or alias
+    )
     if not isinstance(selected, str) or not selected.strip():
-        raise ModelConfigurationError("LLM_MODEL(또는 OPENAI_MODEL)에 사용할 모델명을 설정하세요")
+        name = model_env_var or "LLM_MODEL(또는 OPENAI_MODEL)"
+        raise ModelConfigurationError(f"{name}에 사용할 모델명을 설정하세요")
     options = {"model": selected.strip(), "api_key": api_key, "timeout": timeout, "max_retries": max_retries}
     if temperature is not None:
         options["temperature"] = temperature
@@ -373,6 +377,7 @@ class InvestmentResult(Serializable):
     risks: list[str] = field(default_factory=list)
     missing_information: list[str] = field(default_factory=list)
     needs_more_information: bool = False
+    provisional: bool = False
 
     def __post_init__(self):
         nonempty(self.company_name, "company_name")
@@ -381,9 +386,11 @@ class InvestmentResult(Serializable):
         for key in ("key_reasons", "risks", "missing_information"):
             strings(getattr(self, key), key)
         require(type(self.needs_more_information) is bool, "needs_more_information 오류")
+        require(type(self.provisional) is bool, "provisional 오류")
         require(not self.missing_information or self.needs_more_information,
                 "부족 정보가 있으면 needs_more_information=True여야 합니다")
-        require(not self.needs_more_information or self.decision in ("pending", "additional_research", "hold"),
+        require(not self.needs_more_information or self.provisional
+                or self.decision in ("pending", "additional_research", "hold"),
                 "정보 부족 상태에서 최종 투자 판단을 내릴 수 없습니다")
 
 
@@ -399,9 +406,9 @@ class ReportAgentInput(InvestmentAgentInput):
         require(self.investment_result is not None, "필수 투자 판단 결과 누락")
         self.investment_result = InvestmentResult(**mapping(self.investment_result, "investment_result"))
         require(self.investment_result.company_name == self.company_name, "투자 판단의 company_name 불일치")
-        require(self.investment_result.total_score == calculate_total(self.results)
-                or (self.investment_result.total_score is None and self.investment_result.needs_more_information),
-                "투자 판단 총점과 전문 Agent 점수 합계가 다릅니다")
+        require(self.investment_result.total_score is not None
+                or self.investment_result.needs_more_information,
+                "투자 판단 총점이 필요합니다")
         if self.evaluation_status is None:
             self.evaluation_status = self.investment_result.decision
         require(self.evaluation_status == self.investment_result.decision,

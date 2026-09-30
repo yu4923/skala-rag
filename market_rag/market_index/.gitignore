@@ -1,3 +1,0 @@
-# Runtime-generated market RAG cache. Rebuild it from market_data/*.pdf.
-*
-!.gitignore

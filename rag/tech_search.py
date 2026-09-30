@@ -29,10 +29,13 @@ def document_to_result(doc) -> dict:
     if published is not None:
         if not isinstance(published, str) or date.fromisoformat(published).isoformat() != published:
             raise ValueError("published_date는 YYYY-MM-DD 형식이어야 합니다.")
+    source = metadata["source"]
+    if source.startswith("tech_data/"):
+        source = "data/tech/" + source.removeprefix("tech_data/")
     return {
         "source_title": metadata["source_title"],
         "source_type": "pdf",
-        "source": metadata["source"],
+        "source": source,
         "excerpt": doc.page_content,
         "page": page,
         "published_date": published,
@@ -70,7 +73,7 @@ def create_rag_search(company_id: str, top_k: int = 3, min_similarity=None,
         if doc.metadata.get("company_id") != code:
             raise ValueError("인덱스에 다른 기업의 문서가 섞여 있습니다.")
 
-    def rag_search(query: str) -> list[dict]:
+    def rag_search(query: str, *, query_vector=None) -> list[dict]:
         """관련도순 원문 청크를 반환하며 검색 실패는 예외로 전달한다."""
         if not isinstance(query, str):
             raise TypeError("query는 문자열이어야 합니다.")
@@ -79,7 +82,9 @@ def create_rag_search(company_id: str, top_k: int = 3, min_similarity=None,
         # 기업당 약 10~15개라 전체 후보에서 중복 제거 후 상위 k개를 선택한다.
         if store.index.ntotal == 0:
             return []
-        matches = store.similarity_search_with_score(query, k=store.index.ntotal)
+        matches = (store.similarity_search_with_score_by_vector(query_vector, k=store.index.ntotal)
+                   if query_vector is not None else
+                   store.similarity_search_with_score(query, k=store.index.ntotal))
         # 작은 패널티만 적용해 본문을 우선하되 관련도 차이가 큰 순서는 뒤집지 않는다.
         matches.sort(key=lambda pair: float(pair[1]) + (
             0.04 if pair[0].metadata.get("content_kind") in

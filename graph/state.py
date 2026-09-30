@@ -109,9 +109,10 @@ class InvestmentResult(TypedDict):
     company_name: str
     round_no: int
 
-    total_score: float
+    total_score: float | None
     criteria_met: bool
     decision_reason: str
+    provisional: NotRequired[bool]
 
 
 class EvaluationStatus(TypedDict):
@@ -184,5 +185,3 @@ class InvestmentState(TypedDict):
 
     # 최종 보고서
     report: NotRequired[str]
-
-

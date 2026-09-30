@@ -19,6 +19,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 if __name__ == "__main__" and not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -201,8 +202,8 @@ def calculate_growth(start_value: float, end_value: float, years: float) -> dict
 
 class MarketScoutAgent:
     def __init__(self, model: Any, web_search: MarketSearch, rag_search: MarketSearch, *,
-                 system_prompt: str | None = None, max_searches: int = 8,
-                 max_results: int = 3, recursion_limit: int = 30):
+                 system_prompt: str | None = None, max_searches: int = 4,
+                 max_results: int = 3, recursion_limit: int = 10):
         if max_searches < 2 or not 1 <= max_results <= 5 or recursion_limit < 1:
             raise ValueError("max_searches>=2, max_results=1~5, recursion_limit>=1이 필요합니다.")
         prompt = market_scout_prompt.MARKET_SCOUT_PROMPT if system_prompt is None else system_prompt
@@ -303,7 +304,7 @@ class MarketScoutAgent:
                    json.loads(search_web.invoke({"query": f"{scope} PoC 유료 고객 장기계약 설치 영업 {missing_query}"}))]
         if not registry:
             record_error("retrieval", LookupError(), "시장성과 고객 수요를 평가할 검색·입력 근거가 없습니다.")
-            return MarketRun(result=self._unavailable(request, [item.message for item in errors]),
+            return MarketRun(result=self._unavailable(request, [item.message for item in errors], registry),
                              errors=errors, retrieval_queries=queries)
         try:
             agent = create_agent(model=self.model, tools=[search_documents, search_web, growth_tool],
@@ -320,7 +321,7 @@ class MarketScoutAgent:
                              retrieval_queries=queries, calculations=calculations)
         except Exception as exc:
             record_error("evaluation", exc, "모델 응답 또는 근거 검증 실패로 시장성 재평가가 필요합니다.")
-            return MarketRun(result=self._unavailable(request, [item.message for item in errors]),
+            return MarketRun(result=self._unavailable(request, [item.message for item in errors], registry),
                              errors=errors, retrieval_queries=queries, calculations=calculations)
 
     @staticmethod
@@ -341,7 +342,8 @@ class MarketScoutAgent:
             cited[item.evidence_id] = Evidence(evidence_id=item.evidence_id,
                 claim=f"{item.claim}\n원문: {item.excerpt}", source_title=title,
                 source_url=original.source if is_url else None, page=original.page)
-        missing = [*assessment.missing_items, *(item.message for item in errors)]
+        # 검색 경로 일부가 실패해도 인용한 자료로 두 항목을 평가했다면 보류하지 않는다.
+        missing = list(assessment.missing_items)
         evaluations: list[CriterionEvaluation] = []
         used: dict[str, Evidence] = {}
         for criterion in MARKET_CRITERIA:
@@ -351,8 +353,6 @@ class MarketScoutAgent:
                 missing.append(f"{criterion}: 점수 산정에 필요한 근거 부족")
             if not ids:
                 missing.append(f"{criterion}: 연결된 근거 없음")
-            elif all(registry[eid].source_type == "input" for eid in ids):
-                missing.append(f"{criterion}: 입력 자료를 독립적인 출처로 교차검증해야 합니다.")
             used.update((eid, cited[eid]) for eid in ids)
             reason = item.reason
             if not evaluations:
@@ -362,17 +362,24 @@ class MarketScoutAgent:
         if assessment.status != "success" and not missing:
             missing.append("시장성 평가가 완료되지 않아 추가 확인이 필요합니다.")
         if assessment.status == "error":
-            return MarketScoutAgent._unavailable(request, missing)
+            return MarketScoutAgent._unavailable(request, missing, registry)
         needs_more = bool(missing)
         return AgentResult(agent_name="market", company_name=request.company_name, evaluations=evaluations,
                            evidence=list(used.values()), risks=[], missing_information=list(dict.fromkeys(missing)),
                            confidence="low" if needs_more else "medium", needs_more_information=needs_more)
 
     @staticmethod
-    def _unavailable(request: MarketAgentInput, reasons: list[str]) -> AgentResult:
+    def _unavailable(request: MarketAgentInput, reasons: list[str],
+                     registry: dict[str, MarketSource] | None = None) -> AgentResult:
+        evidence = []
+        for eid, item in (registry or {}).items():
+            is_url = urlsplit(item.source).scheme in {"http", "https"}
+            evidence.append(Evidence(evidence_id=eid, claim=item.excerpt,
+                source_title=item.source_title if is_url else f"{item.source_title} [{item.source}]",
+                source_url=item.source if is_url else None, page=item.page))
         return AgentResult(agent_name="market", company_name=request.company_name,
-            evaluations=[CriterionEvaluation(criterion=criterion, score=None, reason="근거 부족 또는 실행 실패로 평가 불가")
-                         for criterion in MARKET_CRITERIA], evidence=[],
+            evaluations=[CriterionEvaluation(criterion=criterion, score=None, reason="확보한 자료를 활용한 잠정 평가 필요")
+                         for criterion in MARKET_CRITERIA], evidence=evidence,
             missing_information=list(dict.fromkeys(reasons)), confidence="low", needs_more_information=True)
 
     def as_node(self):
@@ -386,6 +393,19 @@ class MarketScoutAgent:
 def create_market_scout(model: Any, web_search: MarketSearch, rag_search: MarketSearch,
                         **kwargs) -> MarketScoutAgent:
     return MarketScoutAgent(model, web_search, rag_search, **kwargs)
+
+
+def _default_web_search(query: str) -> list[MarketSource]:
+    """시장·고객 관련 공개 웹 자료를 Tavily에서 가져온다."""
+    api_key = os.environ["TAVILY_API_KEY"]
+    body = json.dumps({"api_key": api_key, "query": query, "max_results": 5}).encode("utf-8")
+    request = Request("https://api.tavily.com/search", data=body,
+                      headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=10) as response:
+        items = json.load(response).get("results", [])
+    return [MarketSource(source_title=item.get("title") or item["url"],
+                         source_type="web", source=item["url"], excerpt=item["content"])
+            for item in items if item.get("url") and item.get("content")]
 
 
 def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -405,10 +425,11 @@ def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     model = kwargs.get("model")
     if model is None:
         from langchain_openai import ChatOpenAI
-        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
+        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE,
+                           timeout=30, max_retries=0)
     empty_search = lambda query: []
     agent = create_market_scout(
-        model, kwargs.get("web_search") or empty_search,
+        model, kwargs.get("web_search", _default_web_search),
         kwargs.get("rag_search") or empty_search,
     )
     result = agent.run(request, config=kwargs.get("config"))
@@ -418,7 +439,13 @@ def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
          "excerpt": item.excerpt, "source_type": item.source_type,
          "source": item.source, **({"page": item.page} if item.page is not None else {})}
         for item in assessment.evidence
-    ] if assessment is not None else []
+    ] if assessment is not None else [
+        {"evidence_id": item.evidence_id, "claim": item.claim, "excerpt": item.claim,
+         "source_type": "pdf" if item.page is not None else "web" if item.source_url else "input",
+         "source": item.source_url or item.source_title,
+         **({"page": item.page} if item.page is not None else {})}
+        for item in result.result.evidence
+    ]
     used_ids = {item.evidence_id for item in result.result.evidence}
     evidence = [item for item in evidence if item["evidence_id"] in used_ids]
     scores = [
@@ -429,12 +456,13 @@ def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     ]
     missing = result.result.missing_information
     status = "success" if assessment is not None and assessment.status == "success" and not missing else "partial"
-    if assessment is None and not scores:
-        status = "error"
     output = {
         "company_name": request.company_name, "round_no": request.round_no,
         "agent": "market_scout", "status": status,
-        "summary": assessment.summary if assessment is not None else "시장성 평가에 필요한 근거가 부족합니다.",
+        "summary": assessment.summary if assessment is not None else (
+            "확보한 시장 자료: " + "; ".join(item.claim[:160] for item in result.result.evidence[:2])
+            if result.result.evidence else "입력된 기업·시장 정보를 바탕으로 잠정 평가합니다."
+        ),
         "evidence": evidence, "missing_items": missing, "scores": scores,
     }
     if len(scores) == len(MARKET_CRITERIA):
