@@ -1,21 +1,3 @@
-"""에너지 스타트업 평가 그래프.
-
-실행:
-    python app.py --companies 기업명1 기업명2 --request "평가 요청"
-
-Agent 모듈 인터페이스:
-    founder_insight / market_scout / tech_brief:
-        run(state, criteria) -> AgentResult
-    investment_evaluator:
-        review_evidence(state) -> EvidenceReview
-        run(state, total_score, criteria_met) -> str  # 최종 판단 설명
-    report_generator:
-        run(state) -> str  # 최종 보고서
-
-검색·LLM 처리는 agents/ 모듈에서 구현한다.
-미구현 또는 실패한 Agent의 결과와 점수는 임의로 생성하지 않는다.
-"""
-
 import math
 import os
 from copy import deepcopy
@@ -30,14 +12,13 @@ from langgraph.graph import END, START, StateGraph
 # 평가 기준 및 실행 설정: 변경할 값은 이곳에서 관리
 # ──────────────────────────────────────
 
-# 이전에 논의한 기준값. 프로젝트 기준이 확정되면 이 값들을 수정한다.
 RECOMMEND_SCORE = 75.0
 RAW_SCORE_MAX = 5.0
 MIN_CRITERION_SCORE = 3.0
 MAX_RETRIES = 1
 MIN_EVIDENCE_COUNT = 1
 STOP_ON_FIRST_RECOMMENDATION = True
-GRAPH_RECURSION_LIMIT = 100
+GRAPH_RECURSION_LIMIT = 500
 SCORE_TOLERANCE = 1e-6
 ENABLE_LANGSMITH = False
 
@@ -345,12 +326,26 @@ def investment_gate(state: InvestmentState):
 
 def prepare_retry(state: InvestmentState):
     retry = state["retry_state"]
-    if retry["retry_count"] < retry["max_retries"]:
+
+    # 이미 1회 재탐색했다면 더 이상 증가시키지 않음
+    if retry["retry_count"] >= MAX_RETRIES:
         return {
-            "retry_state": {**retry, "retry_count": retry["retry_count"] + 1},
-            "evaluation_status": {"decision": "pending", "stop_reason": "in_progress"},
+            "evaluation_status": {
+                **state["evaluation_status"],
+                "stop_reason": "max_retry_reached",
+            }
         }
-    return {}
+
+    return {
+        "retry_state": {
+            **retry,
+            "retry_count": retry["retry_count"] + 1,
+        },
+        "evaluation_status": {
+            "decision": "pending",
+            "stop_reason": "retry",
+        },
+    }
 
 
 def save_company_result(state: InvestmentState):
@@ -398,7 +393,13 @@ def choose_investment_route(state):
 
 
 def choose_retry_route(state):
-    return "start_evaluation" if state["evaluation_status"]["decision"] == "pending" else "save_company_result"
+    if (
+        state["retry_state"]["retry_count"] == 1
+        and state["evaluation_status"]["decision"] == "pending"
+    ):
+        return "start_evaluation"
+
+    return "save_company_result"
 
 
 def choose_company_route(state):
