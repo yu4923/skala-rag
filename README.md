@@ -4,6 +4,34 @@
 
 ## Overview
 
+### 종합 투자 판단·보고서 Agent 실행
+
+Python 3.10 이상이 필요합니다. 현재 이 두 Agent와 실행 예제는 표준 라이브러리만 사용하므로 패키지 설치와 API 키가 필요하지 않습니다. 의존성 범위는 `requirements-agent.txt`에 명시했습니다.
+
+처음 받는 경우:
+
+```sh
+git clone --branch agent https://github.com/yu4923/skala-rag.git
+cd skala-rag
+python3 demo_agents.py
+```
+
+이미 저장소가 있다면 로컬 작업을 커밋하거나 보관한 뒤 `git switch agent`, `git pull --no-rebase origin agent`로 갱신하고 실행합니다. Windows에서는 `python3` 대신 `py -3`를 사용할 수 있습니다.
+
+```sh
+# 자료 부족 시나리오 실행
+python3 demo_agents.py --needs-more-information
+
+# 단위 테스트 실행
+python3 -m unittest discover -s tests -v
+```
+
+실행 결과는 터미널에 JSON으로 출력됩니다. 기본 Mock은 총점 `100.0`, 판단 `pending`이며, 자료 부족 Mock은 총점 `null`, 판단 `additional_research`입니다. 두 경우 모두 실제 기업 평가가 아닙니다. 현재 실행 범위는 전문 Agent의 Mock 결과를 받아 종합 판단과 템플릿 보고서를 생성하는 단계이며, LLM·웹 검색·RAG·전체 Graph는 실행하지 않습니다.
+
+`agents/`와 `prompts/`를 포함한 저장소 전체를 받아야 합니다. 공통 보조 코드는 `agents/evaluation_support.py`, 보고서 프롬프트는 `prompts/report_generator_prompt.py`에 있습니다. 다른 프로젝트에서 호출하는 방법과 미연결 항목은 [연동 안내](tests/README.md)를 참고하세요.
+
+### 설계 목표
+
 - **Objective**: 에너지 스타트업의 창업자·팀 역량, 시장 규모·성장 가능성, 실제 고객 수요, 제품·기술 정보의 구체성과 명확성을 기준으로 투자 검토 적합성 분석
 - **Method**: LangGraph 기반 Multi-Agent Workflow, Agentic RAG, 웹 검색, 계산 Tool, 구조화된 State를 활용한 결과 통합
 - **Output**: 출처와 평가 점수, 최종 판단을 포함하는 기업 평가 보고서

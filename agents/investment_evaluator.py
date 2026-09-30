@@ -5,12 +5,12 @@ from .evaluation_support import (
     collect_evidence, mapping, unique,
 )
 
-# TODO(프롬프트 연동): 최종 종합 투자 판단 프롬프트 수령 후
-# agents/investment_evaluator.py의 INVESTMENT_SYSTEM_PROMPT를 수정한다.
+# TODO(프롬프트 연동): 종합 투자 판단 프롬프트 파일이 추가되면
+# 이 파일에서 해당 상수를 import해 INVESTMENT_SYSTEM_PROMPT로 연결한다.
+# 현재 prompts/에는 종합 투자 판단 프롬프트가 없다. 필요한 입력·출력 및
+# 판단 규칙은 tests/README.md의 '프롬프트 검토 및 요청 사항'에 정리했다.
 # 현재 이 상수는 사용하지 않는다. LLM/API 확정 후 호출부를 별도로 연결해야 한다.
-INVESTMENT_SYSTEM_PROMPT = """
-TODO: 최종 종합 투자 판단 프롬프트를 여기에 붙여넣는다.
-"""
+INVESTMENT_SYSTEM_PROMPT: str | None = None
 
 
 class InvestmentEvaluator:
