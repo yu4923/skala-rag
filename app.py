@@ -36,8 +36,9 @@ def main():
     deferred_states = []
     for company in companies:
         initial = make_initial_state(company, request,
-                                     max_steps=setting('MAX_SUPERVISOR_STEPS', int, 12),
-                                     max_retries=setting('MAX_RESEARCH_RETRIES', int, 2))
+                                     max_steps=setting('MAX_WORKFLOW_STEPS', int, 100),
+                                     max_retries=setting('MAX_RESEARCH_RETRIES', int, 2),
+                                     max_research_attempts=setting('MAX_RESEARCH_ATTEMPTS', int, 6))
         print(f"[{company}] trace_id={initial['trace_id']}", flush=True)
         result = graph.invoke(initial, config={'recursion_limit': GRAPH_RECURSION_LIMIT,
                                              'metadata': {'trace_id': initial['trace_id']}})
@@ -45,10 +46,18 @@ def main():
         print(f"[{company}] {result['status']}: {verdict['reason']}", flush=True)
         if result['status'] == 'finished':
             print(result['report']['markdown'])
+            from agents.pdf_export import save_report_pdf
+            path = save_report_pdf(result['report']['markdown'], company, initial['report_date'])
+            print(f'PDF: {path}', flush=True)
             return
         deferred_states.append(result)
     from agents.report_generator import render_deferred_report
-    print(render_deferred_report(deferred_states))
+    markdown = render_deferred_report(deferred_states)
+    print(markdown)
+    if deferred_states:
+        from agents.pdf_export import save_report_pdf
+        path = save_report_pdf(markdown, '기업별_조사_보류', deferred_states[0]['report_date'], deferred=True)
+        print(f'PDF: {path}', flush=True)
 
 
 if __name__ == '__main__':

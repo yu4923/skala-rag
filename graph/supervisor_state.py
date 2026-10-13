@@ -54,16 +54,20 @@ class State(TypedDict):
     step_count: int
     max_steps: int
     max_retries: int
+    max_research_attempts: int
+    max_report_attempts: int
+    decision_failures: int
     node_status: Annotated[dict[str, NodeStatus], merge_by_node]
     node_attempts: Annotated[dict[str, int], merge_by_node]
     node_errors: Annotated[dict[str, str | None], merge_errors]
     last_error: str | None
-    action: Literal["collect", "write", "review", "finish", "blocked"]
+    action: Literal["collect", "write", "review", "finish", "blocked", "replan"]
     status: Literal["running", "finished", "blocked"]
     evidence_sufficient: bool
     report_date: str
     report: dict | None
     report_revision: int
+    report_basis: dict[str, int]
     report_review: dict | None
     review_revision: int | None
     verdict: dict | None  # 현재 최종 판단. 전체 결정/계획 이력을 저장하지 않는다.
@@ -73,16 +77,20 @@ ResearchState = State
 
 
 def initial_state(company_name: str, *, research_request: str,
-                  product_names: list[str] | None = None, max_steps: int = 12,
-                  max_retries: int = 2, trace_id: str | None = None) -> State:
+                  product_names: list[str] | None = None, max_steps: int = 100,
+                  max_retries: int | None = None, max_research_attempts: int | None = None, max_report_attempts: int = 3, trace_id: str | None = None) -> State:
     if not company_name.strip() or not research_request.strip():
         raise ValueError('company_name과 research_request가 필요합니다.')
-    if max_steps < 1 or max_retries < 0:
-        raise ValueError('max_steps >= 1, max_retries >= 0이어야 합니다.')
+    retry_limit = 2 if max_retries is None else max_retries
+    if max_steps < 1 or retry_limit < 0 or not 1 <= max_report_attempts <= 3:
+        raise ValueError('max_steps >= 1, max_retries >= 0, 보고서 작성 상한은 1~3이어야 합니다.')
+    research_limit = (6 if max_retries is None else retry_limit + 1) if max_research_attempts is None else max_research_attempts
+    if not 1 <= research_limit <= 20:
+        raise ValueError('수집 실행 상한은 1~20이어야 합니다.')
     return State(company_name=company_name.strip(), research_request=research_request,
                  product_names=list(product_names or []), research_tasks={}, perspectives={},
                  trace_id=trace_id or str(uuid4()), step_count=0, max_steps=max_steps,
-                 max_retries=max_retries, node_status={}, node_attempts={}, node_errors={}, last_error=None, action="collect",
+                 max_retries=retry_limit, max_research_attempts=research_limit, max_report_attempts=max_report_attempts, decision_failures=0, node_status={}, node_attempts={}, node_errors={}, last_error=None, action="collect",
                  status="running", evidence_sufficient=False, verdict=None,
                  report_date=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
-                 report=None, report_revision=0, report_review=None, review_revision=None)
+                 report=None, report_revision=0, report_basis={}, report_review=None, review_revision=None)

@@ -70,73 +70,73 @@ def build_graph(*, supervisor_handler=None, workers=None, report_handler=None, r
                 'step_count': state['step_count'] if step_count is None else step_count}
 
     def supervisor(state):
+        from .policy import inspect_state, validate_plan, PlanError
         if state['step_count'] >= state['max_steps']:
-            return stop(state, 'STEP_LIMIT', 'Supervisor 실행 상한 도달. 승인되지 않은 보고서는 최종 결과로 확정하지 않음.')
+            return stop(state, 'STEP_LIMIT', '전체 실행 안전 상한 도달. 미승인 결과는 승인하지 않음.')
         step = state['step_count'] + 1
-        report = state['report']
-        review = state['report_review']
-        review_revision = state['review_revision']
-        # 추가 수집 시 기존 보고서/검토를 무효화한다. 고정 실행 횟수를 사용하지 않는다.
-        if state['action'] == 'collect' and state['research_tasks']:
-            report, review, review_revision = None, None, None
-        report_update = {'report': report, 'report_review': review, 'review_revision': review_revision}
         try:
-            research = {}
-            for role, perspective in state['perspectives'].items():
-                result = Collection.model_validate(perspective)
-                if role not in ROLES or result.company_name != state['company_name'] or result.agent != role:
-                    raise ValueError('수집 결과의 기업 또는 Agent 불일치')
-                research[role] = result.model_dump()
-            review_status = ('missing_report' if not report else
-                             'unreviewed' if not review or review_revision != state['report_revision'] or state['node_status'].get('reviewer') == 'error' else
-                             'passed' if ReportReview.model_validate(review).passed else 'failed')
-            available = [role for role in (*ROLES, 'report_generator', 'reviewer')
-                         if state['node_attempts'].get(role, 0) < state['max_retries'] + 1]
-            payload = {'company_name': state['company_name'], 'request': state['research_request'],
-                       'perspectives': research, 'research': research, 'report': report,
-                       'report_review': review, 'report_review_status': review_status,
-                       'node_status': state['node_status'], 'node_attempts': state['node_attempts'],
-                       'node_errors': state['node_errors'], 'available_agents': available,
-                       'remaining_steps': state['max_steps'] - state['step_count']}
-            output = supervisor_handler(payload) if supervisor_handler else import_module('agents.supervisor').run(payload)
-            decision = ResearchDecision.model_validate(output)
-            actual = {r for r, data in research.items() if data['findings'] and data['evidence']}
-            if set(decision.collected_perspectives) != actual:
-                raise ValueError('수집된 관점 선언과 실제 근거 불일치')
-            sufficient = decision.evidence_sufficient and actual == set(ROLES) and not any(state['node_status'].get(r) == 'error' for r in ROLES)
-            # 충분성 완료 요청은 현재 산출물 상태에 맞춰 작성/검토로 보정한다.
-            # 미검토 보고서를 보류하거나 승인으로 간주하지 않는다.
-            if decision.action == 'finish' and sufficient and review_status in ('missing_report', 'unreviewed'):
-                target = 'write' if review_status == 'missing_report' else 'review'
-                log(state, 'decision_corrected', requested_action='finish', decision=target, reason=f'현재 보고서 상태: {review_status}')
-                decision = decision.model_copy(update={'action': target})
-            if decision.action == 'write' and not sufficient:
-                raise ValueError('보고서 작성에는 현재 세 관점의 근거 충분성 판정이 필요함')
-            if decision.action == 'review' and (not report or review_status != 'unreviewed'):
-                raise ValueError('검토할 현재 미검토 보고서가 필요함')
-            if decision.action == 'finish' and (not sufficient or review_status != 'passed' or state['node_status'].get('report_generator') == 'error'):
-                raise ValueError('finish에는 현재 보고서의 세 기준 검토 통과가 필요함')
-            targets = [t.agent for t in decision.tasks] if decision.action == 'collect' else (
-                ['report_generator'] if decision.action == 'write' else ['reviewer'] if decision.action == 'review' else [])
-            if any(role not in available for role in targets):
-                return {**stop(state, 'ATTEMPT_LIMIT', '선택된 작업의 재시도 상한 도달. 승인 보고서 없음.', step_count=step), **report_update}
+            policy = inspect_state(state)
+            report = state['report'] if policy['report_current'] else None
+            review = state['report_review'] if policy['report_current'] else None
+            if policy['approved']:
+                # 현재 근거/보고서 버전의 검토 통과가 확인되면 첫 승인 결과를 확정한다.
+                decision = ResearchDecision(action='finish', reason='현재 보고서가 세 검토 기준을 통과했습니다.',
+                                            evidence_sufficient=True, collected_perspectives=policy['covered'],
+                                            missing_items=[], tasks=[])
+            elif policy['allowed_actions'] == ['blocked']:
+                missing = [r for r in ROLES if r not in policy['covered']]
+                counts = ', '.join(f"{r} {state['node_attempts'].get(r, 0)}/{state['max_research_attempts']}" for r in ROLES)
+                details = ('보고서 작성 3회 이후에도 승인 조건을 충족하지 못했습니다.' if policy['remaining_attempts']['report_generator'] == 0 else
+                           f"필요한 조사 근거 미확보({', '.join(missing)}). 추가 수집 가능 작업이 없습니다.")
+                details += ' 수집 횟수: ' + counts
+                if review:
+                    details += ' 검토 지적: ' + '; '.join(review.get('required_actions', []))
+                return stop(state, 'NO_AVAILABLE_ACTION', details, step_count=step)
+            else:
+                payload = {'company_name': state['company_name'], 'request': state['research_request'],
+                           'research': policy['research'], 'report': report, 'report_review': review,
+                           'report_review_status': policy['report_review_status'],
+                           'current_evidence_sufficient': state['evidence_sufficient'] if policy['report_current'] else False,
+                           'overview_ready': policy['healthy'],
+                           'node_status': state['node_status'], 'node_attempts': state['node_attempts'],
+                           'node_errors': state['node_errors'], 'available_agents': policy['available_agents'],
+                           'allowed_actions': policy['allowed_actions'], 'remaining_attempts': policy['remaining_attempts'],
+                           'last_decision_error': state['last_error']}
+                output = supervisor_handler(payload) if supervisor_handler else import_module('agents.supervisor').run(payload)
+                decision = ResearchDecision.model_validate(output)
+                validate_plan(decision, policy)
             log(state, 'decision', decision=decision.action, reason=decision.reason, plan=decision.model_dump())
+            # 과거 초안/평가 지적은 재작성 입력으로 보존한다. 승인/검토 가능 여부는
+            # report_basis와 review_revision을 통해 현재 근거 버전만 인정한다.
+            report_update = {}
             return {**report_update, 'action': decision.action,
                     'status': 'finished' if decision.action == 'finish' else 'blocked' if decision.action == 'blocked' else 'running',
-                    'evidence_sufficient': sufficient if decision.action != 'collect' else False,
-                    'verdict': ({'action': decision.action, 'reason': decision.reason, 'evidence_sufficient': sufficient,
-                                 'missing_items': decision.missing_items} if decision.action in ('finish', 'blocked') else None),
-                    'step_count': step, 'research_tasks': {t.agent: t.model_dump() for t in decision.tasks},
+                    'evidence_sufficient': (policy['healthy'] if decision.action == 'write' else
+                                            state['evidence_sufficient'] if decision.action in ('review', 'finish') else False),
+                    'verdict': ({'action': decision.action, 'reason': decision.reason,
+                                 'evidence_sufficient': decision.action == 'finish', 'missing_items': decision.missing_items}
+                                if decision.action in ('finish', 'blocked') else None),
+                    'step_count': step, 'decision_failures': 0,
+                    'research_tasks': {t.agent: t.model_dump() for t in decision.tasks},
                     'last_error': 'EVIDENCE_INSUFFICIENT' if decision.action == 'blocked' else None}
         except Exception as exc:
-            return {**stop(state, type(exc).__name__, f'Supervisor 실행 또는 계약 검증 실패: {type(exc).__name__}', step_count=step), **report_update}
+            from agents.collection import safe_error_details
+            validation_details = safe_error_details(exc)
+            detail = str(exc) if isinstance(exc, PlanError) else json.dumps(validation_details, ensure_ascii=False) if validation_details else type(exc).__name__
+            failures = state['decision_failures'] + 1
+            log(state, 'decision_retry', reason=detail, error_type=type(exc).__name__, attempt=failures)
+            if failures >= 3:
+                return {**stop(state, 'DECISION_RETRY_LIMIT', f'허용 행동에 맞는 계획 생성 실패: {detail}', step_count=step), 'decision_failures': failures}
+            return {'action': 'replan', 'status': 'running', 'verdict': None, 'research_tasks': {},
+                    'last_error': detail, 'step_count': step, 'decision_failures': failures}
 
     def report_task(state):
         role = 'report_generator'
         attempt = state['node_attempts'].get(role, 0) + 1
         payload = {'company_name': state['company_name'], 'request': state['research_request'],
                    'research': state['perspectives'], 'report_date': state['report_date'],
-                   'report': state['report'], 'report_review': state['report_review']}
+                   'report': state['report'], 'report_review': state['report_review'],
+                   'execution_errors': state['node_errors']}
         try:
             output = report_handler(payload) if report_handler else import_module('agents.report_generator').run(payload)
             registry = evidence_registry(state['perspectives'])
@@ -146,9 +146,11 @@ def build_graph(*, supervisor_handler=None, workers=None, report_handler=None, r
             log(state, 'task_end', node=role, status='success')
             return {'report': report, 'report_revision': state['report_revision'] + 1,
                     'report_review': None, 'review_revision': None,
+                    'report_basis': {r: state['node_attempts'].get(r, 0) for r in ROLES},
                     'node_status': {role: 'success'}, 'node_attempts': {role: attempt}, 'node_errors': {role: None}}
         except Exception as exc:
-            log(state, 'task_error', node=role, error_type=type(exc).__name__)
+            from agents.collection import safe_error_details
+            log(state, 'task_error', node=role, error_type=type(exc).__name__, validation_details=safe_error_details(exc))
             return {'report_review': None, 'review_revision': None, 'node_status': {role: 'error'},
                     'node_attempts': {role: attempt}, 'node_errors': {role: type(exc).__name__}}
 
@@ -163,10 +165,13 @@ def build_graph(*, supervisor_handler=None, workers=None, report_handler=None, r
             return {'report_review': review, 'review_revision': state['report_revision'],
                     'node_status': {role: 'success'}, 'node_attempts': {role: attempt}, 'node_errors': {role: None}}
         except Exception as exc:
-            log(state, 'task_error', node=role, error_type=type(exc).__name__)
+            from agents.collection import safe_error_details
+            log(state, 'task_error', node=role, error_type=type(exc).__name__, validation_details=safe_error_details(exc))
             return {'node_status': {role: 'error'}, 'node_attempts': {role: attempt}, 'node_errors': {role: type(exc).__name__}}
 
     def route(state):
+        if state['action'] == 'replan':
+            return 'supervisor'
         if state['action'] == 'collect':
             return [Send(role, dict(state)) for role in state['research_tasks']]
         return {'write': 'report_generator', 'review': 'reviewer'}.get(state['action'], END)

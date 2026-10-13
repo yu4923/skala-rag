@@ -89,6 +89,16 @@ class SupervisorDecision(Contract):
         return self
 
 
+class ReportParagraph(Contract):
+    heading: str | None
+    text: str = Field(min_length=1)
+    evidence_ids: list[str]
+
+
+class ReportSection(Contract):
+    paragraphs: list[ReportParagraph] = Field(min_length=1)
+
+
 class ReportDraft(Contract):
     summary: str = Field(min_length=1)
     business_overview: str = Field(min_length=1)
@@ -122,6 +132,8 @@ class ResearchDecision(Contract):
     evidence_sufficient: bool
     collected_perspectives: list[Literal['founder_insight', 'market_scout', 'tech_brief']]
     missing_items: list[str]
+    research_need: Literal["none", "missing_perspective", "source_conflict", "identity_unclear"] = "none"
+    research_evidence_ids: list[str] = Field(default_factory=list)
     tasks: list[ResearchTask] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode='after')

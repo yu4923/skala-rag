@@ -17,3 +17,6 @@ sentence-transformers>=3,<6
 torch>=2,<3
 faiss-cpu>=1.8,<2
 numpy>=1.26,<3
+
+# Report PDF export
+reportlab>=4.2,<5
