@@ -45,12 +45,15 @@ class Collection(Contract):
     missing_items: list[str] = Field(default_factory=list)
     queries_used: list[str]
     search_errors: list[str] = Field(default_factory=list)
+    raw_documents: dict[str, dict] = Field(default_factory=dict)  # 근거 ID -> 원본 검색 데이터/질의
 
     @model_validator(mode='after')
     def grounding(self):
         ids = {e.evidence_id for e in self.evidence}
         if len(ids) != len(self.evidence) or any(set(f.evidence_ids) - ids for f in self.findings):
             raise ValueError('Unknown or duplicated evidence ID')
+        if set(self.raw_documents) - ids:
+            raise ValueError('raw 데이터가 수집 근거에 없는 ID를 참조합니다.')
         registry = {e.evidence_id: e for e in self.evidence}
         for finding in self.findings:
             if finding.excerpts and set(finding.excerpts) != set(finding.evidence_ids):
@@ -110,3 +113,25 @@ class ReportReview(Contract):
     @property
     def passed(self):
         return all(x.passed and not x.issues for x in (self.groundedness, self.neutrality, self.bias_control)) and not self.required_actions
+
+
+class ResearchDecision(Contract):
+    """자료 수집 완료 여부만 판단. 투자/보고서 승인과 구분한다."""
+    action: Literal['collect', 'finish', 'blocked']
+    reason: str = Field(min_length=1)
+    evidence_sufficient: bool
+    collected_perspectives: list[Literal['founder_insight', 'market_scout', 'tech_brief']]
+    missing_items: list[str]
+    tasks: list[ResearchTask] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode='after')
+    def plan(self):
+        if (self.action == 'collect') != bool(self.tasks):
+            raise ValueError('collect에는 작업이 필요하고 종료에는 작업이 없어야 합니다.')
+        if len({t.agent for t in self.tasks}) != len(self.tasks):
+            raise ValueError('같은 관점의 중복 fan-out은 허용하지 않습니다.')
+        if self.action == 'finish' and (not self.evidence_sufficient or self.missing_items):
+            raise ValueError('미해결 필수 정보가 있으면 finish할 수 없습니다.')
+        if self.action == 'blocked' and self.evidence_sufficient:
+            raise ValueError('blocked와 충분성 판정 불일치')
+        return self

@@ -35,3 +35,9 @@ SCORE_TOLERANCE=1e-6
 # 기본 평가 입력
 COMPANIES=엔라이튼,해줌,식스티헤르츠,시너지,인코어드테크놀로지스,브이피피랩,브이젠,에너지엑스,크로커스에너지,러셀
 DEFAULT_REQUEST=후보 기업을 순서대로 평가하고 추천할 기업이 나오면 즉시 해당 기업의 보고서를 작성해줘
+
+# 자료 수집 Supervisor
+SUPERVISOR_MODEL=gpt-4o
+MAX_SUPERVISOR_STEPS=12
+MAX_RESEARCH_RETRIES=2
+RESEARCH_REQUEST=기업의 팀·시장·고객·제품·기술을 출처와 함께 중립적으로 조사해줘

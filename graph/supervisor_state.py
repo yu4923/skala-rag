@@ -1,10 +1,10 @@
-"""세 자료 수집 Agent가 공통으로 사용하는 조사 State.
+"""세 수집 Agent 공통 State.
 
 설계 원칙:
-- State는 제어/재시도 및 조정에 필요한 제한된 관점 요약만 보관한다.
-- 전체 원문·발췌·계획 이력·결정 로그는 외부 파일에 두고 trace_id로 상관시킨다.
-- findings 최대 6개(각 300자), sources 최대 12개, missing_items 최대 6개(각 300자).
-- scores/evaluations/투자 추천은 조사 산출물에 포함하지 않는다.
+- 조사 payload는 perspectives에 직접 보관하고 관점별 최신 결과로 교체한다.
+- 제어/재시도 정보와 현재 최종 verdict만 유지한다. 로그/계획 이력은 누적하지 않는다.
+- 관측성은 logger/콜백으로 분리하고 trace_id로 연결한다. 파일 저장은 하지 않는다.
+- 점수/투자 추천을 생성하지 않는다. 메모리 State는 프로세스 종료 시 사라진다.
 """
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -12,12 +12,15 @@ from typing_extensions import TypedDict
 
 
 class PerspectiveResult(TypedDict):
+    # agents.contracts.Collection.model_dump()와 동일한 공통 산출물 계약.
     company_name: str
-    view: str
-    findings: list[str]
-    sources: list[str]  # 실제 URL 또는 PDF 파일명/원본 페이지
+    agent: str
+    findings: list[dict]
+    evidence: list[dict]  # 실제 URL/파일·페이지·검색 원문
     missing_items: list[str]
-    result_ref: str    # 전체 Collection 외부 저장 참조
+    queries_used: list[str]
+    search_errors: list[str]
+    raw_documents: dict[str, dict]  # 원본 검색 데이터와 질의. 보고서 근거 검토용
 
 
 NodeStatus = Literal['pending', 'running', 'success', 'partial', 'error', 'stopped']
@@ -53,6 +56,10 @@ class State(TypedDict):
     node_attempts: Annotated[dict[str, int], merge_by_node]
     node_errors: Annotated[dict[str, str | None], merge_errors]
     last_error: str | None
+    action: Literal["collect", "finish", "blocked"]
+    status: Literal["running", "finished", "blocked"]
+    evidence_sufficient: bool
+    verdict: dict | None  # 현재 최종 판단. 전체 결정/계획 이력을 저장하지 않는다.
 
 
 ResearchState = State
@@ -68,4 +75,5 @@ def initial_state(company_name: str, *, research_request: str,
     return State(company_name=company_name.strip(), research_request=research_request,
                  product_names=list(product_names or []), research_tasks={}, perspectives={},
                  trace_id=trace_id or str(uuid4()), step_count=0, max_steps=max_steps,
-                 max_retries=max_retries, node_status={}, node_attempts={}, node_errors={}, last_error=None)
+                 max_retries=max_retries, node_status={}, node_attempts={}, node_errors={}, last_error=None, action="collect",
+                 status="running", evidence_sufficient=False, verdict=None)

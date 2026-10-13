@@ -1,17 +1,7 @@
+"""자료 수집 Supervisor 실행. State는 실행 메모리에만 유지한다."""
 import argparse
 from uuid import uuid4
-from graph.graph import (
-    ENABLE_LANGSMITH,
-    GRAPH_RECURSION_LIMIT,
-    build_graph,
-    configure_logging,
-    make_initial_state,
-    setting,
-)
-
-COMPANIES = [name.strip() for name in setting("COMPANIES").split(",")]
-DEFAULT_REQUEST = setting("DEFAULT_REQUEST")
-
+from graph.graph import build_graph, make_initial_state, setting, configure_logging, ENABLE_LANGSMITH, GRAPH_RECURSION_LIMIT
 
 def initialize_rag_stores():
     """실행 시 누락된 로컬 인덱스를 구축하고 완성된 인덱스는 재사용한다."""
@@ -31,37 +21,35 @@ def initialize_rag_stores():
     initialize_market_rag()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="에너지 스타트업 투자 평가")
-    parser.add_argument("--trace", action=argparse.BooleanOptionalAction, default=ENABLE_LANGSMITH)
-    args = parser.parse_args()
 
+def main():
+    parser = argparse.ArgumentParser(description='기업 자료 수집 및 Supervisor 근거 충분성 판단')
+    parser.add_argument('--company', help='단일 조사 기업. 생략하면 COMPANIES 후보 순서 사용')
+    parser.add_argument('--request', default=None)
+    parser.add_argument('--trace', action=argparse.BooleanOptionalAction, default=ENABLE_LANGSMITH)
+    args = parser.parse_args()
     configure_logging(args.trace)
     initialize_rag_stores()
-    initial_state = make_initial_state(COMPANIES, DEFAULT_REQUEST)
-    result = initial_state
-    shown = set()
-    for result in build_graph().stream(
-        initial_state, config={"recursion_limit": GRAPH_RECURSION_LIMIT}, stream_mode="values"
-    ):
-        company = result["company_context"]["company_name"]
-        for field, label in (("founder_result", "창업자"), ("market_result", "시장"), ("tech_result", "기술"),
-                             ("investment_result", "종합 평가")):
-            value = result.get(field) or {}
-            if field == "market_result" and callable(getattr(value, "model_dump", None)):
-                value = value.model_dump()
-                value["round_no"] = result["market_round_no"]
-            key = (company, value.get("round_no"), field)
-            if value.get("company_name") == company and key not in shown:
-                print(f"[{company} / {value['round_no']}회차] {label} 완료", flush=True)
-                shown.add(key)
-    if "report" in result:
-        print(result["report"])
-    else:
-        for error in result["errors"]:
-            print(f"[{error['company_name']} / {error['node']}] {error['code']}: {error['message']}")
-        raise SystemExit("보고서 생성이 완료되지 않았습니다. errors 기록과 Agent 구현을 확인하세요.")
+    companies = [args.company] if args.company else [s.strip() for s in setting('COMPANIES').split(',') if s.strip()]
+    request = args.request or setting('RESEARCH_REQUEST', default='기업의 팀·시장·고객·제품·기술을 실제 출처와 함께 중립적으로 조사해줘')
+    graph = build_graph()
+    for company in companies:
+        initial = make_initial_state(company, request,
+                                     max_steps=setting('MAX_SUPERVISOR_STEPS', int, 12),
+                                     max_retries=setting('MAX_RESEARCH_RETRIES', int, 2))
+        print(f"[{company}] trace_id={initial['trace_id']}", flush=True)
+        result = graph.invoke(initial, config={'recursion_limit': GRAPH_RECURSION_LIMIT,
+                                             'metadata': {'trace_id': initial['trace_id']}})
+        verdict = result['verdict']
+        print(f"[{company}] {result['status']}: {verdict['reason']}", flush=True)
+        if result['status'] == 'finished':
+            for role, perspective in result['perspectives'].items():
+                print(f"[{role}] {'; '.join(f['claim'] for f in perspective['findings'])}")
+                sources = [e['source'] if e['source_type'] == 'web' else f"{e['source_title']}, p. {e['page']}" for e in perspective['evidence']]
+                print('출처: ' + '; '.join(dict.fromkeys(sources)))
+            return
+    raise SystemExit('근거 충분성을 충족한 기업이 없습니다. 출력된 기업별 보류 사유를 확인하세요.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

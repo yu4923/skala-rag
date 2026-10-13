@@ -94,7 +94,8 @@ def make_searchers(company_name, *, retriever=None, adapter=adapt_retrieval_resu
             rows.append({'source_type': kind, 'source': source, 'source_title': doc.source_title,
                          'excerpt': doc.content, 'page': doc.page,
                          'provenance': doc.metadata.get('provenance', 'unknown'),
-                         'document_id': doc.document_id, 'chunk_id': doc.chunk_id})
+                         'document_id': doc.document_id, 'chunk_id': doc.chunk_id,
+                         'raw_document': doc.model_dump(mode='json')})
         return rows
     return [tech_documents, web_backend if web_backend is not None else web_search]
 
