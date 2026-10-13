@@ -84,7 +84,25 @@ flowchart TD
 
 세 전문 Agent의 결과가 모두 준비되면 통합 Node가 근거·누락 정보·실행 한계를 정리합니다. 근거가 부족해도 종합 투자 평가로 전달하며, 잠정 점수와 한계를 함께 반영합니다. 추천 여부와 종합 점수는 `investment_evaluator`가 항목 점수를 기준으로 판단합니다.
 
-현재 `.env`의 `MAX_RETRIES=1`에 따라 기업별 재평가는 한 번 수행합니다. 추천 기업이 나오면 `STOP_ON_FIRST_RECOMMENDATION=true` 설정에 따라 바로 보고서를 작성합니다. 추천 기업 없이 후보 탐색이 끝나도 확보한 평가 결과로 보고서를 작성합니다.
+현재 `.env`의 `MAX_RETRIES=1`에 따라 기업 전체 재평가는 한 번 수행합니다. 현재 후보 목록의 10개 기업은 추천 여부와 관계없이 모두 평가하고 보고서를 작성합니다. 이 흐름에서는 `STOP_ON_FIRST_RECOMMENDATION`으로 조기 종료하지 않습니다.
+
+### 시장성 에이전트 Graph 연결 계약
+
+- `agents.market_scout.run(state, ...)`와 `MarketScoutAgent.as_node()`는 동일한 State 변경분을 반환합니다. 내부에서는 `MarketScoutAgent.run()`의 `MarketRun.result`를 공통 `AgentResult` 그대로 `market_result`에 저장합니다.
+- 입력은 `company_context.company_name`, `company_description`, `target_market`과 `evaluation_request`에서 만듭니다. 설명·목표 시장이 없으면 빈 문자열로 전달하며 임의의 시장을 지정하지 않습니다.
+- `retry_state.market_retry_count`는 현재 기업 기준입니다. 0은 1회차, 1은 2회차이며, 재실행 시 이전 결과의 `missing_information`을 `previous_missing_items`로 전달합니다. Graph는 2회차 완료 이후 호출을 차단합니다.
+- `market_errors`는 최근 실행 오류로 교체합니다. `needs_more_information`, `missing_information`, `evaluations`와 함께 Supervisor가 판단할 수 있습니다. 검색 오류가 있어도 근거가 유효하면 평가 결과를 유지합니다. 시장성 결과의 미정 점수는 `None`으로 보존합니다.
+- 실행 전체의 `trace_id`는 모델 호출 metadata와 `outputs/market_trace.jsonl`의 상세 오류·검색 질의·계산 기록에 사용합니다. 로컬 트레이스 저장은 `configure_logging()`에서 설정합니다.
+- `company_context.current_index`로 후보 진행을 관리합니다. 다음 기업으로 이동하면 시장성 결과·최근 오류·평가 회차와 시장 재실행 횟수를 초기화합니다.
+- `step_count`는 병렬 노드도 각각 합산하는 전체 노드 실행 횟수입니다. `max_steps`는 현재 `GRAPH_RECURSION_LIMIT` 설정값으로 초기화되며, 기업 수 10과 별개입니다. 한도 초과 전 실행을 중단합니다.
+
+현재 저장소의 다음 노드 선택은 기존 조건부 Edge가 담당합니다. 별도 Supervisor와 보고서 품질 평가·재작성 루프는 아직 구현되어 있지 않습니다. 시장성 에이전트는 경로 선택을 반환하지 않습니다.
+
+외부 검색·LLM 호출 없는 계약 검증:
+
+```sh
+python -m unittest discover -s tests -v
+```
 
 ### Report Structure
 

@@ -279,7 +279,10 @@ def graph_agent_input(state, *, allow_missing=False):
                             "missing_information": [f"{name}: 현재 회차 결과 없음"], "needs_more_information": True}
         else:
             require(name in state, f"필수 Agent 결과 누락: {name}")
-            values[name] = specialist_from_graph(state[name], role, company, round_no)
+            if role == "market":
+                values[name] = validate_specialist(state[name], role, company)
+            else:
+                values[name] = specialist_from_graph(state[name], role, company, round_no)
     review = deepcopy(state.get("evidence_review", {}))
     if review:
         require(review.get("company_name") == company and review.get("round_no") == round_no,

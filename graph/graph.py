@@ -1,5 +1,8 @@
 import math
 import os
+import logging
+from functools import wraps
+from uuid import uuid4
 from copy import deepcopy
 from importlib import import_module
 from pathlib import Path
@@ -7,6 +10,7 @@ from dotenv import dotenv_values, load_dotenv
 from .state import InvestmentState
 
 from langgraph.graph import END, START, StateGraph
+from langchain_core.runnables import RunnableConfig
 
 
 # ──────────────────────────────────────
@@ -247,7 +251,12 @@ def call_agent(agent, state, function="run", **kwargs):
     if not callable(handler):
         raise NotImplementedError(f"{AGENT_MODULES[agent]}.{function} 함수를 구현해야 합니다.")
     # 병렬 노드와 원본 State를 변경하지 않도록 별도 값을 전달한다.
-    return handler(state=deepcopy(state), **deepcopy(kwargs))
+    # RunnableConfig에는 콜백·실행 컨텍스트가 있어 deepcopy 대상에서 제외한다.
+    config = kwargs.pop("config", None)
+    arguments = deepcopy(kwargs)
+    if config is not None:
+        arguments["config"] = config
+    return handler(state=deepcopy(state), **arguments)
 
 
 def validate_agent_result(result, state, agent):
@@ -338,10 +347,20 @@ def founder_insight(state: InvestmentState):
     return run_specialist(state, "founder_insight")
 
 
-def market_scout(state: InvestmentState):
-    from rag.market_scout import rag_search
+def market_scout(state: InvestmentState, config: RunnableConfig = None):
+    # Supervisor가 실수로 재선택해도 기업별 2회차 결과를 다시 실행하지 않는다.
+    count = state["retry_state"]["market_retry_count"]
+    if type(count) is not int or count < 0:
+        raise ValueError("market_retry_count는 0 이상의 정수여야 합니다.")
+    if count > 1 or state.get("market_round_no", 0) >= 2:
+        return {}
+    return call_agent("market_scout", state, config=config)
 
-    return run_specialist(state, "market_scout", rag_search=rag_search)
+
+def market_graph_view(state):
+    """기존 통합 노드용 임시 표현. State에는 공통 결과를 그대로 보존한다."""
+    from agents.evaluation_support import specialist_to_graph
+    return specialist_to_graph(state["market_result"], state)
 
 
 def tech_brief(state: InvestmentState):
@@ -352,8 +371,8 @@ def integrate_results(state: InvestmentState):
     company, round_no = identity(state)
     results, missing, updates = [], [], {}
     for agent, key in AGENT_RESULT_FIELDS.items():
-        result = state.get(key, {})
         try:
+            result = market_graph_view(state) if agent == "market_scout" and state.get(key) is not None else state.get(key, {})
             validate_agent_result(result, state, agent)
             results.append(result)
         except (ValueError, TypeError, KeyError) as exc:
@@ -362,6 +381,8 @@ def integrate_results(state: InvestmentState):
     # 병렬 Agent가 각각 확보한 자료를 모은 뒤, 출처 연결이 없는 잠정 항목을 한 번 더 검토한다.
     all_evidence = {item["evidence_id"]: item for result in results for item in result["evidence"]}
     for agent, field in AGENT_RESULT_FIELDS.items():
+        if agent == "market_scout":
+            continue  # 시장성 미확정 점수는 공통 결과의 None과 누락 정보로 유지한다.
         original = state.get(field)
         if not isinstance(original, dict) or original not in results:
             continue
@@ -443,7 +464,8 @@ def investment_evaluator(state: InvestmentState):
         if not is_current(state.get("evidence_review"), state):
             raise ValueError("현재 회차의 근거 검토 결과가 필요합니다.")
         for agent, field in AGENT_RESULT_FIELDS.items():
-            validate_agent_result(state[field], state, agent)
+            result_view = market_graph_view(state) if agent == "market_scout" else state[field]
+            validate_agent_result(result_view, state, agent)
         result = call_agent("investment_evaluator", state, function="assess")
         if not is_current(result, state) or not is_number(result.get("total_score")) or not 0 <= result["total_score"] <= 100:
             raise ValueError("종합 평가의 기업·회차 또는 점수가 올바르지 않습니다.")
@@ -482,6 +504,7 @@ def prepare_retry(state: InvestmentState):
         "retry_state": {
             **retry,
             "retry_count": retry["retry_count"] + 1,
+            "market_retry_count": min(retry["market_retry_count"] + 1, 1),
         },
         "evaluation_status": {
             "decision": "pending",
@@ -498,18 +521,24 @@ def save_company_result(state: InvestmentState):
     }
     for key in (*AGENT_RESULT_FIELDS.values(), "evidence_review", "investment_result"):
         result = state.get(key, {})
-        if is_current(result, state):
+        if key == "market_result" and result is not None:
+            record[key] = deepcopy(result)
+        elif is_current(result, state):
             record[key] = deepcopy(result)
     record["errors"] = [deepcopy(item) for item in state.get("errors", []) if is_current(item, state)]
+    record["market_errors"] = deepcopy(state.get("market_errors", []))
+    record["market_round_no"] = state.get("market_round_no", 0)
     return {"company_results": [record]}
 
 
 def next_company(state: InvestmentState):
     context = state["company_context"]
-    index = context["company_index"] + 1
+    index = context["current_index"] + 1
     return {
-        "company_context": {**context, "company_index": index, "company_name": context["company_candidates"][index]},
-        "retry_state": {**state["retry_state"], "retry_count": 0, "retry_reason": "initial"},
+        "market_result": None, "market_round_no": 0, "market_errors": [],
+        "company_context": {**context, "current_index": index, "company_name": context["company_candidates"][index],
+                            "company_description": "", "target_market": ""},
+        "retry_state": {**state["retry_state"], "retry_count": 0, "market_retry_count": 0, "retry_reason": "initial"},
         "evaluation_status": {"decision": "pending", "stop_reason": "in_progress"},
     }
 
@@ -547,9 +576,8 @@ def choose_retry_route(state):
 
 def choose_company_route(state):
     context = state["company_context"]
-    if STOP_ON_FIRST_RECOMMENDATION and state["evaluation_status"]["decision"] == "recommend":
-        return "report_generator"
-    if context["company_index"] + 1 < len(context["company_candidates"]):
+    # 이번 흐름은 추천 여부와 관계없이 모든 후보 기업을 평가한다.
+    if context["current_index"] + 1 < len(context["company_candidates"]):
         return "next_company"
     return "report_generator"
 
@@ -558,22 +586,35 @@ def choose_company_route(state):
 # 그래프 생성
 # ──────────────────────────────────────
 
+def bounded_node(handler):
+    """병렬 노드의 실행 수를 합산하며, 외부 호출 전에 전체 실행 예산을 확인한다."""
+    @wraps(handler)
+    def node(state, config: RunnableConfig = None):
+        step_count = state["step_count"]
+        needed = len(AGENT_RESULT_FIELDS) if handler.__name__ in AGENT_RESULT_FIELDS else 1
+        if step_count + needed > state["max_steps"]:
+            raise RuntimeError("전체 노드 실행 횟수 상한에 도달했습니다.")
+        update = handler(state, config=config) if handler.__name__ == "market_scout" else handler(state)
+        return {**update, "step_count": 1}
+    return node
+
+
 def build_graph():
     validate_settings()
     builder = StateGraph(InvestmentState)
 
-    builder.add_node("start_evaluation", start_evaluation)
-    builder.add_node("founder_insight", founder_insight)
-    builder.add_node("market_scout", market_scout)
-    builder.add_node("tech_brief", tech_brief)
-    builder.add_node("integrate_results", integrate_results)
-    builder.add_node("evidence_gate", evidence_gate)
-    builder.add_node("investment_evaluator", investment_evaluator)
-    builder.add_node("investment_gate", investment_gate)
-    builder.add_node("prepare_retry", prepare_retry)
-    builder.add_node("save_company_result", save_company_result)
-    builder.add_node("next_company", next_company)
-    builder.add_node("report_generator", report_generator)
+    builder.add_node("start_evaluation", bounded_node(start_evaluation))
+    builder.add_node("founder_insight", bounded_node(founder_insight))
+    builder.add_node("market_scout", bounded_node(market_scout))
+    builder.add_node("tech_brief", bounded_node(tech_brief))
+    builder.add_node("integrate_results", bounded_node(integrate_results))
+    builder.add_node("evidence_gate", bounded_node(evidence_gate))
+    builder.add_node("investment_evaluator", bounded_node(investment_evaluator))
+    builder.add_node("investment_gate", bounded_node(investment_gate))
+    builder.add_node("prepare_retry", bounded_node(prepare_retry))
+    builder.add_node("save_company_result", bounded_node(save_company_result))
+    builder.add_node("next_company", bounded_node(next_company))
+    builder.add_node("report_generator", bounded_node(report_generator))
 
     builder.add_edge(START, "start_evaluation")
     for agent in AGENT_RESULT_FIELDS:
@@ -607,15 +648,29 @@ def make_initial_state(companies: list[str], request: str) -> InvestmentState:
     if not names:
         raise ValueError("평가할 기업을 한 개 이상 입력하세요.")
     return {
-        "company_context": {"company_candidates": names, "company_index": 0, "company_name": names[0]},
+        "company_context": {"company_candidates": names, "current_index": 0, "company_name": names[0]},
+        "trace_id": uuid4().hex, "step_count": 0, "max_steps": GRAPH_RECURSION_LIMIT,
+        "market_result": None, "market_errors": [], "market_round_no": 0,
         "evaluation_request": request,
-        "retry_state": {"max_retries": MAX_RETRIES, "retry_count": 0, "retry_reason": "initial"},
+        "retry_state": {"max_retries": MAX_RETRIES, "retry_count": 0, "market_retry_count": 0, "retry_reason": "initial"},
         "evaluation_status": {"decision": "pending", "stop_reason": "in_progress"},
         "errors": [], "route_history": [], "company_results": [],
     }
 
 
 def configure_logging(enable_tracing: bool):
+    # 로컬 JSONL 트레이스는 LangSmith 활성화 여부와 무관하게 남긴다.
+    trace_logger = logging.getLogger("agents.market_scout")
+    if not any(getattr(handler, "market_trace", False) for handler in trace_logger.handlers):
+        trace_path = Path(__file__).resolve().parents[1] / "outputs" / "market_trace.jsonl"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(trace_path, encoding="utf-8")
+        handler.market_trace = True
+        handler.setLevel(logging.INFO)
+        handler.addFilter(lambda record: record.getMessage().startswith('{"event": "market_run"'))
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        trace_logger.addHandler(handler)
+        trace_logger.setLevel(logging.INFO)
     if not enable_tracing:
         os.environ["LANGSMITH_TRACING"] = "false"
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
@@ -625,5 +680,5 @@ def configure_logging(enable_tracing: bool):
     project_name = setting("LANGSMITH_PROJECT")
     if not ENV.get("LANGSMITH_API_KEY"):
         raise ValueError(".env에 LangSmith API 키를 설정하세요.")
-    from langchain_teddynote import logging
-    logging.langsmith(project_name=project_name)
+    from langchain_teddynote import logging as tracing_logging
+    tracing_logging.langsmith(project_name=project_name)

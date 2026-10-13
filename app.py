@@ -47,7 +47,10 @@ def main():
         company = result["company_context"]["company_name"]
         for field, label in (("founder_result", "창업자"), ("market_result", "시장"), ("tech_result", "기술"),
                              ("investment_result", "종합 평가")):
-            value = result.get(field, {})
+            value = result.get(field) or {}
+            if field == "market_result" and callable(getattr(value, "model_dump", None)):
+                value = value.model_dump()
+                value["round_no"] = result["market_round_no"]
             key = (company, value.get("round_no"), field)
             if value.get("company_name") == company and key not in shown:
                 print(f"[{company} / {value['round_no']}회차] {label} 완료", flush=True)

@@ -123,6 +123,7 @@ def assess(state, *, model=None):
         "specialist_score_sum": base_score,
         "specialist_results": data.results,
         "evidence_review": data.evidence_review,
+        "recent_market_errors": state.get("market_errors", []),
         "previous_errors": [
             {"node": item.get("node"), "code": item.get("code"), "message": item.get("message")}
             for item in state.get("errors", []) if item.get("company_name") == company

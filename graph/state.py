@@ -3,6 +3,7 @@
 from operator import add
 from typing import Annotated, Literal
 from typing_extensions import NotRequired, TypedDict
+from agents.evaluation_support import AgentResult as CommonAgentResult
 
 # ──────────────────────────────────────
 # 1. 공통 타입
@@ -32,6 +33,8 @@ StopReason = Literal[
     "criteria_met",
     "insufficient_evidence",
     "criteria_not_met",
+    "retry",
+    "max_retry_reached",
 ]
 
 
@@ -41,12 +44,15 @@ StopReason = Literal[
 
 class CompanyContext(TypedDict):
     company_candidates: list[str]
-    company_index: int
+    current_index: int
     company_name: str
+    company_description: NotRequired[str]
+    target_market: NotRequired[str]
 
 
 class RetryState(TypedDict):
     max_retries: int
+    market_retry_count: int
     retry_count: int
     retry_reason: RetryReason
 
@@ -151,9 +157,12 @@ class CompanyEvaluation(TypedDict):
     evaluation_status: EvaluationStatus
 
     founder_result: NotRequired[AgentResult]
-    market_result: NotRequired[AgentResult]
+    market_result: NotRequired[CommonAgentResult | None]
     tech_result: NotRequired[AgentResult]
     evidence_review: NotRequired[EvidenceReview]
+
+    market_errors: NotRequired[list[dict]]
+    market_round_no: NotRequired[int]
 
     # 근거 부족으로 종합 투자 판단을 수행하지 않았다면 생략
     investment_result: NotRequired[InvestmentResult]
@@ -164,6 +173,12 @@ class CompanyEvaluation(TypedDict):
 # ──────────────────────────────────────
 
 class InvestmentState(TypedDict):
+    trace_id: str
+    step_count: Annotated[int, add]
+    max_steps: int
+    market_round_no: int
+    market_errors: list[dict]
+
     # 평가 시작 시 준비
     company_context: CompanyContext
     evaluation_request: str
@@ -172,7 +187,7 @@ class InvestmentState(TypedDict):
 
     # 각 Node 실행 후 생성
     founder_result: NotRequired[AgentResult]
-    market_result: NotRequired[AgentResult]
+    market_result: NotRequired[CommonAgentResult | None]
     tech_result: NotRequired[AgentResult]
 
     evidence_review: NotRequired[EvidenceReview]

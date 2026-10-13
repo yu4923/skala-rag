@@ -91,7 +91,7 @@ class MarketAgentInput(ContractModel):
     company_name: str = Field(min_length=1)
     evaluation_request: str = Field(min_length=1)
     company_description: str = ""
-    target_market: str = Field(default="국내 B2C 에너지 시장", min_length=1)
+    target_market: str = ""
     round_no: int = Field(default=1, ge=1, le=2)
     previous_missing_items: list[str] = Field(default_factory=list)
     input_evidence: list[MarketSource] = Field(default_factory=list)
@@ -383,10 +383,9 @@ class MarketScoutAgent:
             missing_information=list(dict.fromkeys(reasons)), confidence="low", needs_more_information=True)
 
     def as_node(self):
-        """Graph state['market_input']을 받아 market_result와 errors 변경분을 반환한다."""
-        def node(state, config=None):
-            run = self.run(state["market_input"], config)
-            return {"market_result": run.result, "errors": [item.model_dump() for item in run.errors]}
+        """모듈 run(state)와 동일한 State -> 변경분 계약을 사용한다."""
+        def node(state, config: RunnableConfig = None):
+            return run(state, agent=self, config=config)
         return node
 
 
@@ -408,66 +407,77 @@ def _default_web_search(query: str) -> list[MarketSource]:
             for item in items if item.get("url") and item.get("content")]
 
 
-def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
-    """Graph State를 기존 시장성 Agent의 입력 및 Graph 결과 계약으로 변환한다."""
+def input_from_state(state: Mapping[str, Any]) -> MarketAgentInput:
+    """기업별 시장 재실행 횟수와 현재 기업 정보만으로 입력을 만든다."""
     context = state["company_context"]
-    round_no = state["retry_state"]["retry_count"] + 1
-    criteria = kwargs.get("criteria", list(MARKET_CRITERIA.items()))
-    if dict(criteria) != MARKET_CRITERIA:
-        raise ValueError("시장성 평가 항목과 배점이 Agent 계약과 다릅니다.")
-    agent_input = {
-        **state.get("market_input", {}),
-        "company_name": context["company_name"],
-        "evaluation_request": state["evaluation_request"],
-        "round_no": round_no,
-    }
-    request = MarketAgentInput.model_validate(agent_input)
-    model = kwargs.get("model")
-    if model is None:
-        from langchain_openai import ChatOpenAI
-        model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE,
-                           timeout=30, max_retries=0)
-    empty_search = lambda query: []
-    agent = create_market_scout(
-        model, kwargs.get("web_search", _default_web_search),
-        kwargs.get("rag_search") or empty_search,
+    retry_count = state["retry_state"]["market_retry_count"]
+    if type(retry_count) is not int or retry_count not in (0, 1):
+        raise ValueError("market_retry_count는 0 또는 1이어야 합니다. 시장성 평가는 최대 2회입니다.")
+    previous = state.get("market_result")
+    missing = []
+    if retry_count == 1 and previous is not None:
+        previous = AgentResult.model_validate(previous)
+        if previous.company_name != context["company_name"]:
+            raise ValueError("이전 시장성 결과의 기업명이 현재 기업과 다릅니다.")
+        missing = previous.missing_information
+    return MarketAgentInput(
+        company_name=context["company_name"],
+        company_description=context.get("company_description", ""),
+        target_market=context.get("target_market", ""),
+        evaluation_request=state["evaluation_request"],
+        round_no=retry_count + 1,
+        previous_missing_items=missing,
     )
-    result = agent.run(request, config=kwargs.get("config"))
-    assessment = result.assessment
-    evidence = [
-        {"evidence_id": item.evidence_id, "claim": item.claim,
-         "excerpt": item.excerpt, "source_type": item.source_type,
-         "source": item.source, **({"page": item.page} if item.page is not None else {})}
-        for item in assessment.evidence
-    ] if assessment is not None else [
-        {"evidence_id": item.evidence_id, "claim": item.claim, "excerpt": item.claim,
-         "source_type": "pdf" if item.page is not None else "web" if item.source_url else "input",
-         "source": item.source_url or item.source_title,
-         **({"page": item.page} if item.page is not None else {})}
-        for item in result.result.evidence
-    ]
-    used_ids = {item.evidence_id for item in result.result.evidence}
-    evidence = [item for item in evidence if item["evidence_id"] in used_ids]
-    scores = [
-        {"criterion": item.criterion, "score": item.score,
-         "max_score": MARKET_CRITERIA[item.criterion], "reason": item.reason,
-         "evidence_ids": item.evidence_ids}
-        for item in result.result.evaluations if item.score is not None
-    ]
-    missing = result.result.missing_information
-    status = "success" if assessment is not None and assessment.status == "success" and not missing else "partial"
-    output = {
-        "company_name": request.company_name, "round_no": request.round_no,
-        "agent": "market_scout", "status": status,
-        "summary": assessment.summary if assessment is not None else (
-            "확보한 시장 자료: " + "; ".join(item.claim[:160] for item in result.result.evidence[:2])
-            if result.result.evidence else "입력된 기업·시장 정보를 바탕으로 잠정 평가합니다."
-        ),
-        "evidence": evidence, "missing_items": missing, "scores": scores,
+
+
+def run(state: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Graph 연결 계약: 공통 AgentResult와 최근 실행 메타데이터를 반환한다.
+
+    경로·성공 판정과 재실행 횟수 변경은 Graph/Supervisor가 담당한다.
+    as_node()도 이 함수를 사용하므로 입출력 계약이 동일하다.
+    """
+    request = input_from_state(state)
+    trace_id = state["trace_id"]
+    if not isinstance(trace_id, str) or not trace_id.strip():
+        raise ValueError("실행 전체의 trace_id가 필요합니다.")
+    config = dict(kwargs.get("config") or {})
+    config["metadata"] = {
+        **config.get("metadata", {}), "trace_id": trace_id,
+        "company_name": request.company_name, "market_round_no": request.round_no,
     }
-    if len(scores) == len(MARKET_CRITERIA):
-        output["score"] = sum(item["score"] for item in scores)
-    return output
+    try:
+        agent = kwargs.get("agent")
+        if agent is None:
+            model = kwargs.get("model")
+            if model is None:
+                from langchain_openai import ChatOpenAI
+                model = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE,
+                                   timeout=30, max_retries=0)
+            rag_search = kwargs.get("rag_search")
+            if rag_search is None:
+                from rag.market_scout import rag_search
+            agent = create_market_scout(model, kwargs.get("web_search", _default_web_search), rag_search)
+        market_run = agent.run(request, config=config)
+    except Exception as exc:
+        # 입력 계약 오류는 위에서 즉시 반환하며, 실행 오류만 공통 결과로 보존한다.
+        error = MarketError(company=request.company_name, round=request.round_no,
+                            node="market.execution", error_type=type(exc).__name__,
+                            message="시장성 초기화 또는 실행 실패로 평가 자료를 확보하지 못했습니다.")
+        market_run = MarketRun(result=MarketScoutAgent._unavailable(request, [error.message]),
+                               errors=[error])
+    recent_errors = [item.model_dump() for item in market_run.errors]
+    # 상세 조회/계산/오류는 트레이스에 남기고 State에는 최근 오류만 교체 저장한다.
+    logger.info(json.dumps({
+        "event": "market_run", "trace_id": trace_id,
+        "company_name": request.company_name, "round_no": request.round_no,
+        "errors": recent_errors, "retrieval_queries": market_run.retrieval_queries,
+        "calculations": market_run.calculations,
+    }, ensure_ascii=False))
+    return {
+        "market_result": market_run.result,
+        "market_errors": recent_errors,
+        "market_round_no": request.round_no,
+    }
 
 
 if __name__ == "__main__":
