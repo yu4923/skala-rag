@@ -1,197 +1,218 @@
-# AI Energy Startup Investment Evaluation Agent
+# Subject
 
-본 프로젝트는 AI Agent를 활용하여 에너지 스타트업의 투자 검토 적합성을 분석하는 실습 프로젝트입니다. 창업자·팀 역량, 시장성, 제품·기술 정보를 각 전문 Agent가 조사하고 점수화한 뒤, 평가 결과를 통합하여 투자 판단과 보고서를 생성하도록 설계합니다.
+본 프로젝트는 기업의 공개 자료를 창업자·기업(팀), 시장성, 기업 기술의 세 관점에서 조사하고, **Supervisor 기반 Multi-Agent 패턴**으로 근거를 종합해 중립적인 기업 소개 보고서를 생성하는 프로젝트입니다.
+
+세 수집 Agent는 자료와 원문을 공통 State에 보존합니다. Supervisor는 현재 근거와 보고서 상태를 판단해 수집·작성·검토 작업을 선택하며, 보고서가 Groundedness·중립성·편향 통제 평가를 통과하면 종료합니다.
 
 ## Overview
 
-### 설계 목표
+- **Objective**: 하나의 기업을 복수 관점에서 조사하고, 실제 출처에 연결된 기업 소개 보고서 작성
+- **Pattern**: Supervisor 기반 Multi-Agent Workflow
+- **선정 이유**: 관점별 수집 역할을 분리하면서 추가 조사, 보고서 수정, 최종 종료를 현재 State에 따라 조정하기 위해 선정
+- **동적 처리**: `add_conditional_edges`와 `Send`로 필요한 Worker를 선택·병렬 호출. 수집·작성·평가의 순서를 고정하지 않고 수집 결과와 평가 지적에 따라 분기
+- **최종 결과**: 첫 승인 기업의 보고서 출력. 모든 후보가 보류되면 기업별 조사 요약과 작성·승인 한계를 포함한 보류 보고서 출력
 
-- **Objective**: 에너지 스타트업의 창업자·팀 역량, 시장 규모·성장 가능성, 실제 고객 수요, 제품·기술 정보의 구체성과 명확성을 기준으로 투자 검토 적합성 분석
-- **Method**: LangGraph 기반 Multi-Agent Workflow, Agentic RAG, 웹 검색, 계산 Tool, 구조화된 State를 활용한 결과 통합
-- **Output**: 출처와 평가 점수, 최종 판단을 포함하는 기업 평가 보고서
+## Selected Technologies
+
+현재 조사 대상은 후보 기업과 해당 기업의 사업·제품·기술입니다. SW·HW 기술을 별도 비교 대상으로 선정하는 방식은 적용하지 않습니다.
+
+구현에 선정한 주요 기술은 다음과 같습니다.
+
+- **LangGraph**: State와 조건부 Edge를 이용한 Supervisor 분기 및 Worker 병렬 처리
+- **FAISS·BM25**: 로컬 PDF에서 관련 근거 검색. 시장 RAG는 BM25 결합 검색 사용
+- **Multilingual E5**: 한국어를 포함한 PDF 자료의 임베딩
+- **Tavily**: 공개 웹 자료를 검색해 PDF 근거와 함께 활용
+- **Pydantic**: 수집 결과·작업 계획·보고서·평가 결과의 구조 및 근거 연결 검증
+- **ReportLab·PyMuPDF**: 한글 PDF 출력과 페이지 수 검사
+
+후보 순서는 엔라이튼, 해줌, 식스티헤르츠, 시너지, 인코어드테크놀로지스, 브이피피랩, 브이젠, 에너지엑스, 크로커스에너지, 러셀입니다. `.env`의 `COMPANIES`로 변경할 수 있습니다.
 
 ## Features
 
-- **PDF 기반 정보 추출**: 에너지 시장·정책 보고서, 기술백서, 논문, 실증자료에서 필요한 근거 검색
-- **웹 기반 기업 조사**: 기업 홈페이지, 인터뷰, 투자 기사 등을 활용한 기업·창업자 정보 수집 및 교차검증
-- **전문 Agent별 평가**: 각 Agent가 담당 항목의 근거를 정리하고 점수와 산정 이유 반환
-- **근거 검토와 잠정 평가**: 확보한 자료와 누락·실행 오류를 함께 기록하고, 자료가 부족해도 잠정 점수를 산정
-- **조건부 재평가**: 종합 투자 판단이 추천에 이르지 못하면 설정된 횟수만큼 재평가하고 다음 후보를 탐색
-- **State 기반 처리**: 기업 정보, 전문 평가 결과, 점수, 분기 상태, 오류 기록 공유
-- **보고서 생성**: 평가 결과를 PDF로 저장하고 본문에 사용한 출처를 REFERENCE에 수록
+- **PDF 자료 기반 정보 추출**: 시장 자료와 기업 기술 문서에서 관련 원문·페이지 검색
+- **웹 기반 자료 수집**: 기업·창업자·시장·기술 관련 공개 자료 수집
+- **공통 조사 계약**: 세 Agent가 `findings`, `evidence`, `raw_documents`, 미확인 사항과 검색 오류를 같은 구조로 반환
+- **원본 데이터 보존**: 검색기가 반환한 raw 데이터를 State에 보존하고 보고서 작성에 활용
+- **근거 추적**: 수집 모델은 실제 원문 구간을 선택. 코드가 Evidence와 연결하고 최종 보고서에는 실제 URL 또는 파일명·페이지 표시
+- **동적 추가 조사**: 누락된 관점, 출처 충돌, 기업 식별 문제와 평가 지적에 따라 필요한 작업 선택
+- **확증 편향 방지 전략**: 기업 주장과 독립 출처를 구분하고, 확보한 반대 근거·모순·자료 한계를 검토. 관련 외부 자료도 본문에 인용
+- **상세 보고서 작성**: 장별 관련 자료로 작성한 뒤 원문과 대조해 편집하고, 완성된 본문으로 SUMMARY 생성
+- **보고서 품질 평가**: Groundedness·중립성·편향 통제 검토. 미통과 지적은 실제 보고서 문장에 연결하고 발췌 존재 여부 검증
+- **후보 순회**: 현재 기업이 보류되면 다음 후보로 이동. 첫 승인 보고서가 나오면 종료
+- **PDF 출력**: 제목·작성일·SUMMARY·본문·REFERENCE 구성. SUMMARY 반 페이지, 각 장 2페이지, 전체 10페이지 이내 검사
+
+보고서는 투자 점수·투자 추천·특정 기술 추천이나 우열 판정을 생성하지 않습니다. REFERENCE에는 사용한 자료 제목·URL·페이지를 표시하며, `출처 성격: unknown` 표시는 제외합니다. 같은 출처 위치는 중복 제거합니다.
 
 ## Tech Stack
 
 | 구분 | 기술 및 설정 |
 |---|---|
-| Language | Python |
-| Framework | LangGraph |
-| LLM / Generator | OpenAI `gpt-4o-mini`(창업자·시장), `gpt-4o`(기술·보고서). 모델명은 `.env`에서 변경 가능 |
-| LLM / Judge | OpenAI `gpt-4o`(종합 투자 판단, `INVESTMENT_MODEL`) |
-| Retrieval | 로컬 FAISS(시장·기술 PDF), 시장 RAG의 BM25 결합 검색. Hit@3·MRR@10은 아직 측정하지 않음 |
+| Framework | LangGraph, LangChain OpenAI |
+| LLM / Generator | 예시 설정: 창업자·시장 `gpt-4o-mini`, 기술·Supervisor·보고서 `gpt-4o`. Agent별 환경변수로 변경 가능 |
+| LLM / Judge | `REVIEWER_MODEL`, 예시 설정 `gpt-4o` |
+| Retrieval | 로컬 FAISS, 시장 RAG의 BM25 결합 검색 |
+| Retrieval Metrics | Hit Rate@K·MRR 미측정 |
 | Embedding | `intfloat/multilingual-e5-small` |
 | Web Search | Tavily Search API |
-| PDF Processing | PyMuPDF, LangChain `PyMuPDFLoader` |
-| Calculation | Python 점수 합산 및 시장 성장률·CAGR 계산 함수 |
-| State Schema | TypedDict, Annotated, Pydantic 기반 출력 검증 |
+| PDF Processing | PyMuPDF, LangChain PDF Loader, ReportLab |
+| State / Validation | TypedDict, Annotated Reducer, Pydantic |
+| Observability | 콘솔 logger, 외부 콜백, 선택적 LangSmith |
+
+Supervisor·보고서·평가 모델이 미설정이면 `TECH_MODEL`, 그 값도 없으면 `gpt-4o`를 사용합니다. 수집 Agent는 각 모델 설정을 준비해야 합니다.
 
 ## Agents
 
-| Agent | 모듈 파일명 | 역할 | 활용 방식 | 담당 배점 |
-|---|---|---|---|---:|
-| **Founder Insight** | `agents/founder_insight.py` | 창업자·핵심 팀의 경력과 전문성 평가 | Tavily 웹 검색 | 25 |
-| **Market Scout** | `agents/market_scout.py` | 시장 규모·성장 가능성과 실제 고객 수요 평가 | 시장 RAG, Tavily 웹 검색, 성장률 계산 | 50 |
-| **Tech Brief** | `agents/tech_brief.py` | 제품·기술 정보의 구체성과 차별성 평가 | 기술 RAG, Tavily 웹 검색 | 25 |
-| **Investment Evaluator** | `agents/investment_evaluator.py` | 항목 점수와 근거를 참고해 종합 점수 및 추천 여부 판단 | 통합 State, LLM | 종합 100 |
-| **Report Generator** | `agents/report_generator.py` | 평가 결과를 SUMMARY·본문·REFERENCE로 작성하고 PDF 저장 | 통합 State, LLM | — |
+| Agent | 역할 | 입력·활용 자료 |
+|---|---|---|
+| **Supervisor** | 근거 충분성과 현재 상태에 따라 작업 배정·보고서 작성·검토·종료 선택 | 조사 요약, 출처 메타데이터, 보고서·평가 상태, 실행 한도 |
+| **Founder Insight** | 창업자와 기업의 배경을 폭넓게 조사 | 웹 검색 |
+| **Market Scout** | 시장성과 사업 맥락을 조사 | 시장 PDF RAG, 웹 검색 |
+| **Tech Brief** | 기업의 제품·기술을 조사 | 기술 PDF RAG, 웹 검색 |
+| **Report Generator** | 관련 원문으로 장별 작성·편집 후 SUMMARY 생성 | 조사 요약, Evidence, raw 데이터, 이전 평가 지적 |
+| **Reviewer** | 보고서의 근거 연결·중립성·편향 검토 | 보고서 전체와 검토용 Evidence |
 
-세 전문 평가 Agent는 담당 항목별 점수, 산정 이유, 근거와 출처, 추가 확인사항을 반환합니다. investment_evaluator는 이를 종합해 최종 판단을 생성하고, report_generator는 평가 결과를 보고서로 작성합니다. Tech Brief는 제품·기술 요약과 함께 정보의 구체성 및 명확성을 평가합니다. 이 점수는 기술 타당성이나 실제 성능을 독립적으로 검증한 결과를 의미하지 않습니다.
+Supervisor 아래의 수집 Worker는 세 개이며, 보고서 작성과 평가는 별도 노드입니다. 고정된 세부 조사 항목을 모두 채우도록 강제하지 않고 확보한 자료에 맞춰 조사·보고서를 구성합니다.
+
+### 보고서 평가 기준
+
+| 평가 항목 | 검토 내용 | 목적 |
+|---|---|---|
+| Groundedness | 원문이 실제 주장을 지지하는지, 인용·수치·시점·조건이 맞는지 | 출처 연결과 Hallucination 통제 |
+| 중립성 | 기술 추천·우열 판정·투자 추천이나 근거 없는 평가가 없는지 | 기업·기술 소개 목적 유지 |
+| 편향 통제 | 단일 출처 편중, 홍보 주장의 사실화, 확보된 반대 근거·모순의 누락 여부 | 확증 편향 방지 |
+
+세 항목이 모두 통과하고 `issues`·`required_actions`가 비어 있어야 승인합니다. 평가 발췌의 형식 검증은 별도의 독립 사실 확인을 대신하지 않습니다.
+
+## State Schema
+
+State 구현은 `graph/supervisor_state.py`에 있습니다.
+
+| 설계 항목 | 현재 구현 |
+|---|---|
+| **제어 vs 페이로드 분리** | 조사 결과는 `perspectives`, 보고서는 `report`, 평가는 `report_review`에 보관. `action`, `status`, 현재 작업·호출 횟수·버전 정보는 제어 메타데이터로 관리 |
+| **관측성 위치** | 결정·사유·시각은 State 이력으로 누적하지 않고 콘솔 logger 또는 외부 `event_logger` 콜백으로 전달 |
+| **지속성 비용** | 메모리 State만 사용하고 SQLite·파일 체크포인트는 사용하지 않음. 관점별 현재 결과에 원문을 병합하므로 추가 조사 시 메모리 사용량은 증가할 수 있음 |
+| **상관** | `trace_id`로 기업별 실행 State와 외부 로그·추적 연결 |
+| **재개/복구** | `node_status`, `node_attempts`, `node_errors`, `last_error`로 같은 실행 내 재시도 판단. 프로세스 종료 후 자동 복구는 지원하지 않음 |
+| **동시 처리** | `Send`로 선택 Worker 병렬 호출. 관점·노드별 맵을 Reducer로 병합하고 동일 관점 중복 fan-out 금지 |
+| **종료 보장** | 수집·작성·검토 예산, Supervisor 실행 상한, 연속 계획 실패 상한과 LangGraph recursion limit 적용. 한도 도달을 승인 사유로 사용하지 않음 |
+
+### 주요 필드
+
+- **입력·조사**: `company_name`, `research_request`, `product_names`, `research_tasks`, `perspectives`
+- **제어·오류**: `trace_id`, `action`, `status`, `evidence_sufficient`, `step_count`, `node_status`, `node_attempts`, `node_errors`, `last_error`
+- **상한**: `max_steps`, `max_research_attempts`, `max_report_attempts`, `max_retries`, `decision_failures`
+- **보고서·버전**: `report_date`, `report`, `report_revision`, `report_basis`, `report_review`, `review_revision`, `verdict`
+
+추가 조사 후에도 이전 초안과 평가 지적은 재작성에 전달합니다. `report_basis`와 `review_revision`으로 과거 평가가 최신 근거·보고서의 승인으로 사용되지 않도록 검사합니다.
+
+모델 입력은 State 복사본에서 역할별로 선택·제한합니다. Supervisor에는 raw와 원문 발췌 본문을 전달하지 않고, 보고서 작성에는 해당 장의 관련 원문과 raw를 전달합니다. Reviewer에는 raw 대신 보고서와 Evidence를 전달합니다. 입력이 커지면 일부 원문을 축약하고 축약 사실을 알립니다.
+
+### 기본 실행 상한
+
+| 항목 | 기본값 |
+|---|---:|
+| 수집 Worker별·기업별 호출 | 6회 |
+| 기업별 보고서 작성 노드 | 최대 3회 |
+| 기업별 검토 노드 예산 | `3 × (max_retries + 1)`, 기본 9회 |
+| Supervisor 누적 호출 | 100회 |
+| 연속 계획 생성 실패 | 3회 |
+| LangGraph recursion limit | 500 |
+
+보고서 작성 한 번에는 장별 작성·편집과 SUMMARY 생성 등 여러 LLM 호출이 포함됩니다. 노드 호출 수와 API 호출 수는 다릅니다. RAG 인덱스와 최종 PDF는 파일로 저장되며, 조사 State의 외부 저장과는 구분합니다.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    startNode["평가 시작"]
-    founder["Founder Insight: 창업자 검증 및 점수 평가"]
-    market["Market Scout: 시장성 검증 및 점수 평가"]
-    tech["Tech Brief: 제품·기술 요약 및 점수 평가"]
-    integrate["전문 평가 결과 통합"]
-    evidenceReview["근거·누락·실행 한계 검토"]
-    judge["종합 점수 및 투자 판단"]
-    recommendation["추천 여부 판단"]
-    retryNode["재평가 준비"]
-    saveResult["기업 평가 결과 저장"]
-    nextCompany["다음 후보 기업"]
-    reportNode["보고서 작성"]
-    endNode(["END"])
-
-    startNode --> founder
-    startNode --> market
-    startNode --> tech
-    founder --> integrate
-    market --> integrate
-    tech --> integrate
-    integrate --> evidenceReview --> judge --> recommendation
-    recommendation -->|예| saveResult
-    recommendation -->|아니요| retryNode
-    retryNode -->|재시도 가능| startNode
-    retryNode -->|재시도 종료| saveResult
-    saveResult -->|다음 후보 평가| nextCompany
-    nextCompany --> startNode
-    saveResult -->|추천 또는 후보 소진| reportNode
-    reportNode --> endNode
+    start["기업 조사 시작"] --> supervisor["Supervisor: State와 근거 판단"]
+    supervisor -->|선택 수집| founder["Founder Insight"]
+    supervisor -->|선택 수집| market["Market Scout"]
+    supervisor -->|선택 수집| tech["Tech Brief"]
+    founder --> supervisor
+    market --> supervisor
+    tech --> supervisor
+    supervisor -->|초안 작성 또는 수정| report["Report Generator"]
+    report --> supervisor
+    supervisor -->|현재 보고서 검토| reviewer["Reviewer"]
+    reviewer --> supervisor
+    supervisor -->|평가 통과| finish["보고서 출력 후 종료"]
+    supervisor -->|보류| next["다음 기업"]
+    next -->|후보 존재| start
+    next -->|모두 보류| deferred["기업별 조사 요약과 한계 출력"]
 ```
 
-세 전문 Agent의 결과가 모두 준비되면 통합 Node가 근거·누락 정보·실행 한계를 정리합니다. 근거가 부족해도 종합 투자 평가로 전달하며, 잠정 점수와 한계를 함께 반영합니다. 추천 여부와 종합 점수는 `investment_evaluator`가 항목 점수를 기준으로 판단합니다.
-
-현재 `.env`의 `MAX_RETRIES=1`에 따라 기업 전체 재평가는 한 번 수행합니다. 현재 후보 목록의 10개 기업은 추천 여부와 관계없이 모두 평가하고 보고서를 작성합니다. 이 흐름에서는 `STOP_ON_FIRST_RECOMMENDATION`으로 조기 종료하지 않습니다.
-
-### 시장성 에이전트 Graph 연결 계약
-
-- `agents.market_scout.run(state, ...)`와 `MarketScoutAgent.as_node()`는 동일한 State 변경분을 반환합니다. 내부에서는 `MarketScoutAgent.run()`의 `MarketRun.result`를 공통 `AgentResult` 그대로 `market_result`에 저장합니다.
-- 입력은 `company_context.company_name`, `company_description`, `target_market`과 `evaluation_request`에서 만듭니다. 설명·목표 시장이 없으면 빈 문자열로 전달하며 임의의 시장을 지정하지 않습니다.
-- `retry_state.market_retry_count`는 현재 기업 기준입니다. 0은 1회차, 1은 2회차이며, 재실행 시 이전 결과의 `missing_information`을 `previous_missing_items`로 전달합니다. Graph는 2회차 완료 이후 호출을 차단합니다.
-- `market_errors`는 최근 실행 오류로 교체합니다. `needs_more_information`, `missing_information`, `evaluations`와 함께 Supervisor가 판단할 수 있습니다. 검색 오류가 있어도 근거가 유효하면 평가 결과를 유지합니다. 시장성 결과의 미정 점수는 `None`으로 보존합니다.
-- 실행 전체의 `trace_id`는 모델 호출 metadata와 `outputs/market_trace.jsonl`의 상세 오류·검색 질의·계산 기록에 사용합니다. 로컬 트레이스 저장은 `configure_logging()`에서 설정합니다.
-- `company_context.current_index`로 후보 진행을 관리합니다. 다음 기업으로 이동하면 시장성 결과·최근 오류·평가 회차와 시장 재실행 횟수를 초기화합니다.
-- `step_count`는 병렬 노드도 각각 합산하는 전체 노드 실행 횟수입니다. `max_steps`는 현재 `GRAPH_RECURSION_LIMIT` 설정값으로 초기화되며, 기업 수 10과 별개입니다. 한도 초과 전 실행을 중단합니다.
-
-현재 저장소의 다음 노드 선택은 기존 조건부 Edge가 담당합니다. 별도 Supervisor와 보고서 품질 평가·재작성 루프는 아직 구현되어 있지 않습니다. 시장성 에이전트는 경로 선택을 반환하지 않습니다.
-
-외부 검색·LLM 호출 없는 계약 검증:
-
-```sh
-python -m unittest discover -s tests -v
-```
-
-### Report Structure
-
-| 장 제목 | 포함 내용 |
-|---|---|
-| SUMMARY | 핵심 사업, 시장 기회, 제품·기술 특징, 팀 역량, 최종 판단 요약 |
-| 1. 사업 개요 | 기업·제품, 해결하려는 문제, 핵심 고객과 사업 내용 |
-| 2. 시장성 및 성장 가능성 | 목표시장, 성장 가능성, 실제 고객 수요와 영업 장벽 |
-| 3. 제품·기술 및 팀 역량 | 기술 작동 원리, 차별성·성능 정보, 창업자와 팀 역량 |
-| 4. 종합 평가 및 투자 판단 | 항목별 점수, 종합 점수, 판단 이유와 추가 확인사항 |
-| REFERENCE | 보고서 작성에 사용한 자료의 제목·페이지·URL |
-
-보고서는 전문 Agent 결과 통합 → 근거 검토 → 항목 점수 기반 종합 판단 → SUMMARY 작성 → 본문 작성 → 사용 출처 정리 순서로 구성합니다.
+수집·작성·평가 노드의 결과는 Supervisor로 돌아옵니다. 다음 기업 이동과 전체 후보 보류 보고서 출력은 `app.py`가 담당합니다. 계획 계약·정책 오류는 재판단하며, 실제 노드 선택은 `add_conditional_edges`로 구현합니다.
 
 ## Directory Structure
 
 ```text
 skala-rag/
-├── app.py                         # 실행 및 RAG 인덱스 초기화
-├── requirements.txt               # 전체 Python 의존성
-├── README.md
-├── .env example                   # 환경변수 예시
-├── .env                           # 로컬 설정값 (Git 제외)
-├── .gitignore
-├── agents/
-│   ├── evaluation_support.py
+├── data/                         # 시장·기술 PDF 문서 풀
+├── agents/                       # 수집·조정·작성·평가 Agent
+│   ├── contracts.py              # Pydantic 공통 계약
+│   ├── collection.py             # 원문 선택과 공통 수집 처리
+│   ├── input_limits.py           # 모델 입력 선택·길이 제한
 │   ├── founder_insight.py
-│   ├── investment_evaluator.py
 │   ├── market_scout.py
+│   ├── tech_brief.py
+│   ├── supervisor.py
 │   ├── report_generator.py
-│   └── tech_brief.py
+│   ├── reviewer.py
+│   └── pdf_export.py             # PDF 출력과 분량 검사
 ├── graph/
-│   ├── graph.py                    # Node·Edge 및 분기
-│   └── state.py                    # 공유 State
-├── prompts/
-│   ├── founder_insight_prompt.py
-│   ├── investment_evaluator_prompt.py
-│   ├── market_scout_prompt.py
-│   ├── report_generator_prompt.py
-│   └── tech_brief_prompt.py
-├── data/
-│   ├── market/시장성_종합자료2.pdf
-│   └── tech/tech-10-startups-50pages-2026-09-30.pdf
-└── rag/
-    ├── __init__.py
-    ├── market_scout.py            # 시장 PDF 검색
-    ├── market_index/              # 시장 FAISS 인덱스
-    ├── product_tech_retriever.py  # 기업별 기술 검색 연결
-    ├── tech_embeddings.py         # 로컬 E5 임베딩
-    ├── tech_ingest.py             # 기술 PDF 인덱스 구축
-    ├── tech_search.py             # 기술 FAISS 검색
-    └── vector_index_product/      # 기업별 기술 FAISS 인덱스
+│   ├── graph.py                  # 노드·조건부 Edge·Send
+│   ├── supervisor_state.py       # 현재 State와 Reducer
+│   └── policy.py                 # 행동·버전·실행 상한 검증
+├── prompts/                      # 프롬프트 템플릿
+├── rag/                          # PDF 검색과 로컬 인덱스
+├── outputs/                      # 최종 보고서 PDF
+├── app.py                        # 후보 순회 및 실행 스크립트
+├── requirements.txt
+├── .env example                  # 설정 예시
+└── README.md
 ```
 
-`.venv/`, `.cache/`, `__pycache__/`는 로컬 실행 중 생성되는 폴더입니다. 보고서 생성 시 `outputs/investment_report.pdf`가 만들어집니다.
+`agents/investment_evaluator.py`, `graph/state.py` 등 이전 구현 파일도 남아 있지만 현재 Supervisor 실행 그래프는 투자 평가 모듈을 호출하지 않으며, State는 `graph/supervisor_state.py`를 사용합니다.
 
-## 실행 방법
+## Usage
 
-Python 3.10 이상에서 `.env example`을 참고해 저장소 루트의 `.env`에 API 키와 모델 설정을 입력합니다. PDF 원본은 `data/market/`, `data/tech/`에 두며, `app.py`가 누락된 RAG 인덱스를 실행 시 구축합니다.
+Python 3.10 이상에서 가상환경을 만들고 의존성을 설치합니다. `.env example`을 참고해 저장소 루트의 `.env`에 키와 모델 설정을 준비합니다.
 
-macOS / Linux:
-
-```sh
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python app.py
-python app.py --trace  # LangSmith 추적 사용
-```
 
-Windows PowerShell:
+# 설정된 후보 기업을 순서대로 조사
+python app.py --no-trace
 
-```powershell
-py -3 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python app.py
+# 특정 기업 조사
+python app.py --company 엔라이튼 --no-trace
+
+# LangSmith 추적 사용
 python app.py --trace
 ```
 
-LangSmith 추적 기본값은 `.env`의 `LANGSMITH_TRACING`을 따릅니다. 실행 결과는 터미널에 출력되며 PDF는 `outputs/investment_report.pdf`에 저장됩니다.
+Windows PowerShell의 가상환경 활성화 명령은 `.venv\Scripts\Activate.ps1`입니다.
+
+- **필수 인증**: `OPENAI_API_KEY`, `TAVILY_API_KEY`
+- **모델**: `FOUNDER_MODEL`, `MARKET_MODEL`, `TECH_MODEL`, `SUPERVISOR_MODEL`, `REPORT_MODEL`, `REVIEWER_MODEL`
+- **입력**: `COMPANIES`, `RESEARCH_REQUEST`
+- **실행 상한**: `MAX_WORKFLOW_STEPS`, `MAX_RESEARCH_ATTEMPTS`, `MAX_RESEARCH_RETRIES`, `GRAPH_RECURSION_LIMIT`
+- **선택적 추적**: `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`
+
+셸 환경변수가 `.env`보다 우선합니다. `.env example`에 남아 있는 점수·가중치·투자 추천 설정은 이전 모듈용이며 현재 Supervisor 실행에는 사용하지 않습니다.
+
+실행 시 누락된 RAG 인덱스를 구축하고 기존 인덱스는 재사용합니다. 승인된 보고서는 `outputs/{기업명}_{작성일}.pdf`, 전체 보류 보고서는 `outputs/기업별_조사_보류_{작성일}.pdf`로 저장합니다. 조사 State는 프로세스 메모리에만 유지합니다.
+
+파일 출력 없이 결과를 메모리에서 확인하려면 초기화 후 `build_graph().invoke(...)`로 직접 호출하고 `result['report']['markdown']` 또는 `result['verdict']`를 확인할 수 있습니다. `app.py` 기본 실행에는 PDF 저장이 포함됩니다.
 
 ## Contributors
 
-| 이름 | 담당 | 역할 |
-|---|---|---|
-| 강서현 | Prompt | Agent별 Prompt 템플릿 작성 |
-| 김가은 | Agent | 종합 투자 판단, 보고서 작성, 제품 기술 요약 |
-| 김태완 | Graph | State·Node·Edge 설계, Agent 연동, 평가 결과 검증·통합, 조건부 분기 및 재시도 흐름 구현 |
-| 심지용 | RAG | 시장성 검증 Agent에 필요한 RAG 설계 |
-| 엄진용 | Agent | 창업자 검증, 시장성 검증 |
-| 유선일 | RAG | 제품.기술 요약 Agent에 필요한 RAG 설계 |
+- **강서현**: Prompt Engineering
+- **김가은**: Agent 개발, 보고서·제품 기술 관련 구현
+- **김태완**: Graph·State·Node·Edge 설계 및 Agent 연동
+- **심지용**: 시장 PDF RAG 설계
+- **엄진용**: 창업자·기업 및 시장 Agent 개발
+- **유선일**: 제품·기술 PDF RAG 설계
