@@ -41,7 +41,7 @@ def create_model_from_env(*, model=None, model_env_var=None, temperature=None,
     selected = model if model is not None else (
         setting(model_env_var) if model_env_var else primary or alias
     )
-    if model is None and model_env_var == 'SUPERVISOR_MODEL' and not selected:
+    if model is None and model_env_var in ('SUPERVISOR_MODEL', 'REPORT_MODEL', 'REVIEWER_MODEL') and not selected:
         selected = setting('TECH_MODEL') or 'gpt-4o'
     if not isinstance(selected, str) or not selected.strip():
         name = model_env_var or "LLM_MODEL(또는 OPENAI_MODEL)"

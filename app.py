@@ -33,6 +33,7 @@ def main():
     companies = [args.company] if args.company else [s.strip() for s in setting('COMPANIES').split(',') if s.strip()]
     request = args.request or setting('RESEARCH_REQUEST', default='기업의 팀·시장·고객·제품·기술을 실제 출처와 함께 중립적으로 조사해줘')
     graph = build_graph()
+    deferred_states = []
     for company in companies:
         initial = make_initial_state(company, request,
                                      max_steps=setting('MAX_SUPERVISOR_STEPS', int, 12),
@@ -43,12 +44,11 @@ def main():
         verdict = result['verdict']
         print(f"[{company}] {result['status']}: {verdict['reason']}", flush=True)
         if result['status'] == 'finished':
-            for role, perspective in result['perspectives'].items():
-                print(f"[{role}] {'; '.join(f['claim'] for f in perspective['findings'])}")
-                sources = [e['source'] if e['source_type'] == 'web' else f"{e['source_title']}, p. {e['page']}" for e in perspective['evidence']]
-                print('출처: ' + '; '.join(dict.fromkeys(sources)))
+            print(result['report']['markdown'])
             return
-    raise SystemExit('근거 충분성을 충족한 기업이 없습니다. 출력된 기업별 보류 사유를 확인하세요.')
+        deferred_states.append(result)
+    from agents.report_generator import render_deferred_report
+    print(render_deferred_report(deferred_states))
 
 
 if __name__ == '__main__':

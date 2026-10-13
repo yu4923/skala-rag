@@ -116,8 +116,8 @@ class ReportReview(Contract):
 
 
 class ResearchDecision(Contract):
-    """자료 수집 완료 여부만 판단. 투자/보고서 승인과 구분한다."""
-    action: Literal['collect', 'finish', 'blocked']
+    """자료 수집 및 보고서 작성/검토/종료 계획. 투자 평가는 하지 않는다."""
+    action: Literal['collect', 'write', 'review', 'finish', 'blocked']
     reason: str = Field(min_length=1)
     evidence_sufficient: bool
     collected_perspectives: list[Literal['founder_insight', 'market_scout', 'tech_brief']]

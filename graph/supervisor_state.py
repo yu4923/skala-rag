@@ -8,6 +8,8 @@
 """
 from typing import Annotated, Literal
 from uuid import uuid4
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing_extensions import TypedDict
 
 
@@ -56,9 +58,14 @@ class State(TypedDict):
     node_attempts: Annotated[dict[str, int], merge_by_node]
     node_errors: Annotated[dict[str, str | None], merge_errors]
     last_error: str | None
-    action: Literal["collect", "finish", "blocked"]
+    action: Literal["collect", "write", "review", "finish", "blocked"]
     status: Literal["running", "finished", "blocked"]
     evidence_sufficient: bool
+    report_date: str
+    report: dict | None
+    report_revision: int
+    report_review: dict | None
+    review_revision: int | None
     verdict: dict | None  # 현재 최종 판단. 전체 결정/계획 이력을 저장하지 않는다.
 
 
@@ -76,4 +83,6 @@ def initial_state(company_name: str, *, research_request: str,
                  product_names=list(product_names or []), research_tasks={}, perspectives={},
                  trace_id=trace_id or str(uuid4()), step_count=0, max_steps=max_steps,
                  max_retries=max_retries, node_status={}, node_attempts={}, node_errors={}, last_error=None, action="collect",
-                 status="running", evidence_sufficient=False, verdict=None)
+                 status="running", evidence_sufficient=False, verdict=None,
+                 report_date=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+                 report=None, report_revision=0, report_review=None, review_revision=None)
